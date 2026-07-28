@@ -1,5 +1,7 @@
 # CYNUS Chess Arm web interface
 
+Version: see [`VERSION`](VERSION) (currently the single source of truth for the app version).
+
 Local web interface for the CYNUS robotic chess arm. A Python backend talks to
 the arm over Bluetooth Low Energy (bleak) and lets Stockfish calculate moves
 automatically; the browser shows the board live and provides manual controls
@@ -29,6 +31,27 @@ Download Stockfish from https://stockfishchess.org/download/ and do one of the f
 Without Stockfish the interface still starts, but auto mode will not work; this
 is reported in the UI.
 
+### Engine defaults (`engine_defaults.json`)
+
+Stockfish startup settings live in [`engine_defaults.json`](engine_defaults.json)
+at the project root. Edit this file for your machine and restart the app.
+Keys that start with `_` are comments and are ignored.
+
+| Key | Meaning | Example |
+| --- | ------- | ------- |
+| `elo` | UCI_Elo strength (1320–3190) | `2000` |
+| `analysis_depth` | Depth for candidate-move analysis | `15` |
+| `movetime` | Think time for the played move (ms) | `5000` |
+| `turn` | Robot side to move when building a FEN (`w` / `b`) | `"b"` |
+| `candidates` | Number of MultiPV candidate lines (1–10) | `5` |
+| `hash` | Hash table size in MB | `30720` |
+| `threads` | CPU threads for Stockfish | `20` |
+
+Values are clamped to safe ranges when loaded. If the file is missing or
+invalid, a conservative fallback is used (512 MB hash, 4 threads). The UI
+engine panel can still override settings for the current session; only this
+file sets the values used at startup.
+
 ## Starting
 
 ```powershell
@@ -36,6 +59,8 @@ is reported in the UI.
 ```
 
 Or use `starten.bat` / `starten.ps1`. Then open http://127.0.0.1:8000 in the browser.
+
+For development auto-reload: `$env:CYNUS_RELOAD=1; .venv\Scripts\python main.py`
 
 Use **NL** / **EN** in the header to switch language.
 
@@ -78,7 +103,10 @@ the test panel are added to the `COMMANDS` array at the top of
 
 ## Project structure
 
+- `VERSION` – app version number (edit this file to bump the version)
+- `engine_defaults.json` – Stockfish start settings for this machine (hash, threads, …)
 - `app/server.py` – FastAPI server with WebSocket between browser and backend
+- `app/version.py` – reads `VERSION`
 - `app/ble_manager.py` – BLE scan, connection, and protocol handling
 - `app/engine.py` – Stockfish wrapper
 - `app/game.py` – game state with python-chess (SVG board + SAN moves)

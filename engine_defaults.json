@@ -1,0 +1,10 @@
+{
+  "_readme": "Stockfish-startinstellingen voor deze machine. Pas dit bestand aan en herstart de app. Sleutels met underscore worden genegeerd. hash = MB werkgeheugen, movetime = ms denktijd, turn = kleur van de robot (w of b).",
+  "elo": 2000,
+  "analysis_depth": 15,
+  "movetime": 5000,
+  "turn": "b",
+  "candidates": 5,
+  "hash": 30720,
+  "threads": 20
+}

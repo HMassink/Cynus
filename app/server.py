@@ -4,22 +4,26 @@ aan de BLE-schaakarm en de Stockfish-engine."""
 import asyncio
 import json
 import logging
+import re
 from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 
 from .ble_manager import BleManager
 from .engine import Engine
 from .game import GameState
 from .i18n import DEFAULT_LANGUAGE, tr
+from .version import get_version
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).parent / "static"
+PENDING_SCAN_TIMEOUT_S = 30.0
+MAX_PGN_CHARS = 200_000
 
 app = FastAPI(title="CYNUS schaakarm interface")
 
@@ -47,9 +51,15 @@ class AppState:
         self.pending_scan_keep_history = False
         # Wacht op een FEN voor een losse controlevergelijking na echte bordscan.
         self.pending_check = False
+        self._pending_timeout_task: asyncio.Task | None = None
+        self._pending_timeout_token = 0
+        self.robot_move_busy = False
         self.ponder_fen: str | None = None
         self.ponder_task: asyncio.Task | None = None
         self.ponder_result: dict | None = None
+        self.replay_auto_task: asyncio.Task | None = None
+        self.replay_auto_running = False
+        self.replay_auto_interval = 10.0
 
     # -- broadcast ----------------------------------------------------------
 
@@ -77,6 +87,7 @@ class AppState:
             "connected": self.robot_connected,
             "name": self.ble.device_name,
             "address": self.ble.device_address,
+            "version": get_version(),
         }
 
     def engine_message(self) -> dict:
@@ -106,11 +117,65 @@ class AppState:
         }
 
     async def require_robot_connection(self, action: str) -> bool:
-        if self.robot_connected:
+        connected = self.robot_connected and self.ble.connected
+        if connected:
+            self.robot_connected = True
             return True
+        if self.robot_connected and not self.ble.connected:
+            self.robot_connected = False
         await self.log("info", self.msg("no_connection", action=self.msg(action)))
         await self.broadcast(self.status_message())
         return False
+
+    def cancel_pending_timeout(self) -> None:
+        if self._pending_timeout_task and not self._pending_timeout_task.done():
+            self._pending_timeout_task.cancel()
+        self._pending_timeout_task = None
+
+    def arm_pending_timeout(self, kind: str) -> None:
+        """Start een timeout voor pending_scan_sync of pending_check."""
+        self.cancel_pending_timeout()
+        self._pending_timeout_token += 1
+        token = self._pending_timeout_token
+
+        async def run() -> None:
+            try:
+                await asyncio.sleep(PENDING_SCAN_TIMEOUT_S)
+            except asyncio.CancelledError:
+                raise
+            if token != self._pending_timeout_token:
+                return
+            if kind == "scan" and self.pending_scan_sync:
+                self.pending_scan_sync = False
+                self.pending_scan_keep_history = False
+                await self.log("info", self.msg("pending_scan_timeout"))
+            elif kind == "check" and self.pending_check:
+                self.pending_check = False
+                await self.log("info", self.msg("pending_check_timeout"))
+
+        try:
+            self._pending_timeout_task = asyncio.create_task(run())
+        except RuntimeError:
+            # Geen lopende event loop bij constructie/tests.
+            self._pending_timeout_task = None
+
+    def clear_pending_scan(self) -> None:
+        self.pending_scan_sync = False
+        self.pending_scan_keep_history = False
+        if not self.pending_check:
+            self.cancel_pending_timeout()
+
+    def clear_pending_check(self) -> None:
+        self.pending_check = False
+        if not self.pending_scan_sync:
+            self.cancel_pending_timeout()
+
+    def analysis_fen(self) -> str:
+        """Volledige FEN voor Stockfish: bordstaat als bekend, anders last_fen."""
+        if self.game.has_position:
+            return self.game.board.fen()
+        placement = self.last_fen or "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR"
+        return self.engine.full_fen(placement)
 
     def cancel_ponder(self) -> None:
         if self.ponder_task and not self.ponder_task.done():
@@ -119,13 +184,14 @@ class AppState:
         self.ponder_fen = None
         self.ponder_result = None
 
-    async def start_ponder(self, fen: str) -> None:
+    async def start_ponder(self, fen: str | None = None) -> None:
         if not self.auto_mode or not self.engine.available:
             return
         if self.pending_scan_sync or self.pending_check:
             return
-        if self.game.replay_active:
+        if self.game.replay_active or self.robot_move_busy:
             return
+        fen = fen or self.analysis_fen()
         if self.ponder_fen == fen and self.ponder_task and not self.ponder_task.done():
             return
         self.cancel_ponder()
@@ -158,7 +224,7 @@ class AppState:
 
     async def on_fen(self, fen: str) -> None:
         if self.pending_check:
-            self.pending_check = False
+            self.clear_pending_check()
             current = self.game.board.board_fen() if self.game.has_position else (
                 self.last_fen or "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR"
             )
@@ -189,9 +255,8 @@ class AppState:
         self.last_fen = fen
         self.cancel_ponder()
         if self.pending_scan_sync:
-            self.pending_scan_sync = False
             keep_history = self.pending_scan_keep_history
-            self.pending_scan_keep_history = False
+            self.clear_pending_scan()
             payload = self.orient_board_payload(
                 self.game.sync_from_scan(fen, keep_history=keep_history)
             )
@@ -203,7 +268,7 @@ class AppState:
             else:
                 await self.log("info", self.msg("scan_synced"))
             await self.broadcast(payload)
-            await self.start_ponder(fen)
+            await self.start_ponder()
             return
 
         payload = self.orient_board_payload(self.game.update_from_placement(fen))
@@ -235,7 +300,7 @@ class AppState:
         await self.broadcast(payload)
         if payload.get("last_move"):
             await self.announce_check_state()
-        await self.start_ponder(fen)
+        await self.start_ponder()
 
     async def on_get_move(self) -> None:
         await self.log("info", self.msg("get_move"))
@@ -247,6 +312,9 @@ class AppState:
     async def play_robot_move(self, *, reason: str = "reason.manual") -> None:
         """Laat Stockfish een zet berekenen en stuur die naar de arm."""
         reason_text = self.msg(reason)
+        if self.robot_move_busy:
+            await self.log("info", self.msg("robot_move_busy"))
+            return
         if self.game.replay_active:
             await self.log("info", self.msg("replay_active_block"))
             return
@@ -263,47 +331,54 @@ class AppState:
         if not self.engine.available:
             await self.log("info", self.msg("engine_unavailable", error=self.engine.error))
             return
-        fen = self.last_fen
-        result = None
-        if self.ponder_fen == fen:
-            if self.ponder_result is not None:
-                result = self.ponder_result
-                await self.log("info", self.msg("ponder_cache", reason=reason_text))
-            elif self.ponder_task is not None:
+
+        self.robot_move_busy = True
+        try:
+            fen = self.analysis_fen()
+            result = None
+            if self.ponder_fen == fen:
+                if self.ponder_result is not None:
+                    result = self.ponder_result
+                    await self.log("info", self.msg("ponder_cache", reason=reason_text))
+                elif self.ponder_task is not None:
+                    await self.broadcast({"type": "engine_thinking", "fen": fen})
+                    await self.log("info", self.msg("ponder_finish", reason=reason_text))
+                    try:
+                        await self.ponder_task
+                    except asyncio.CancelledError:
+                        pass
+                    result = self.ponder_result
+
+            if result is None:
                 await self.broadcast({"type": "engine_thinking", "fen": fen})
-                await self.log("info", self.msg("ponder_finish", reason=reason_text))
+                await self.log("info", self.msg("engine_analyzing", reason=reason_text))
                 try:
-                    await self.ponder_task
-                except asyncio.CancelledError:
-                    pass
-                result = self.ponder_result
+                    result = await asyncio.to_thread(self.engine.analyze, fen)
+                except RuntimeError as exc:
+                    await self.log("info", str(exc))
+                    await self.broadcast(self.engine_message())
+                    return
 
-        if result is None:
-            await self.broadcast({"type": "engine_thinking", "fen": fen})
-            await self.log("info", self.msg("engine_analyzing", reason=reason_text))
-            try:
-                result = await asyncio.to_thread(self.engine.analyze, fen)
-            except RuntimeError as exc:
-                await self.log("info", str(exc))
-                await self.broadcast(self.engine_message())
-                return
-
-        move = result["move"]
-        candidates = result.get("candidates") or []
-        score = candidates[0]["score"] if candidates else "?"
-        await self.broadcast({
-            "type": "engine_move",
-            "move": move,
-            "fen": fen,
-            "candidates": candidates,
-            "full_fen": result.get("fen"),
-        })
-        await self.log("info", self.msg("engine_chooses", move=move, score=score))
-        await self.send_to_arm(f"move {move}")
-        self.ponder_result = None
+            move = result["move"]
+            candidates = result.get("candidates") or []
+            score = candidates[0]["score"] if candidates else "?"
+            await self.broadcast({
+                "type": "engine_move",
+                "move": move,
+                "fen": fen,
+                "candidates": candidates,
+                "full_fen": result.get("fen"),
+            })
+            await self.log("info", self.msg("engine_chooses", move=move, score=score))
+            await self.send_to_arm(f"move {move}")
+            self.ponder_result = None
+        finally:
+            self.robot_move_busy = False
 
     async def on_ble_disconnect(self) -> None:
         self.cancel_ponder()
+        self.clear_pending_scan()
+        self.clear_pending_check()
         self.robot_connected = False
         await self.log("info", self.msg("arm_disconnected"))
         await self.broadcast(self.status_message())
@@ -327,6 +402,82 @@ class AppState:
             await self.log("info", self.msg("check"))
             await self.send_to_arm("play audio check")
 
+    def cancel_replay_auto(self) -> None:
+        if self.replay_auto_task and not self.replay_auto_task.done():
+            self.replay_auto_task.cancel()
+        self.replay_auto_task = None
+        self.replay_auto_running = False
+
+    async def execute_replay_move(self) -> dict:
+        """Voer één replayzet uit op bord + robot. Geeft het resultaat van replay_next terug."""
+        result = self.game.replay_next()
+        if not result.get("ok"):
+            await self.log("info", self.msg("replay_info", reason=result.get("reason")))
+            await self.broadcast(self.game.replay_state())
+            return result
+        await self.send_to_arm(f"move {result['uci']}")
+        await self.log(
+            "info",
+            self.msg(
+                "replay_move",
+                index=result["index"],
+                total=result["total"],
+                san=result["san"],
+                uci=result["uci"],
+            ),
+        )
+        if result.get("done"):
+            await self.log("info", self.msg("replay_done"))
+        await self.broadcast(self.board_message())
+        await self.broadcast(self.game.replay_state())
+        await self.announce_check_state()
+        return result
+
+    async def start_replay_auto(self, interval: float) -> None:
+        self.cancel_replay_auto()
+        self.replay_auto_interval = interval
+        self.replay_auto_running = True
+        await self.broadcast({
+            "type": "replay_auto",
+            "running": True,
+            "interval": interval,
+        })
+        await self.log("info", self.msg("replay_auto_started", seconds=interval))
+
+        async def run() -> None:
+            try:
+                while self.game.replay_active and self.replay_auto_running:
+                    result = await self.execute_replay_move()
+                    if not result.get("ok") or result.get("done"):
+                        break
+                    await asyncio.sleep(self.replay_auto_interval)
+            except asyncio.CancelledError:
+                raise
+            finally:
+                was_running = self.replay_auto_running
+                self.replay_auto_running = False
+                self.replay_auto_task = None
+                await self.broadcast({
+                    "type": "replay_auto",
+                    "running": False,
+                    "interval": self.replay_auto_interval,
+                })
+                if was_running and not self.game.replay_active:
+                    await self.log("info", self.msg("replay_auto_finished"))
+
+        self.replay_auto_task = asyncio.create_task(run())
+
+    async def stop_replay_auto(self, *, log_stop: bool = True) -> None:
+        running = self.replay_auto_running
+        self.cancel_replay_auto()
+        await self.broadcast({
+            "type": "replay_auto",
+            "running": False,
+            "interval": self.replay_auto_interval,
+        })
+        if running and log_stop:
+            await self.log("info", self.msg("replay_auto_stopped"))
+
     async def handle_message(self, msg: dict) -> None:
         msg_type = msg.get("type")
 
@@ -341,7 +492,10 @@ class AppState:
             await self.log("info", self.msg("scan_done", count=len(devices)))
 
         elif msg_type == "connect":
-            address = msg.get("address", "")
+            address = str(msg.get("address", "")).strip()
+            if not address:
+                await self.log("info", self.msg("connect_no_address"))
+                return
             await self.log("info", self.msg("connecting", address=address))
             try:
                 await self.ble.connect(address)
@@ -353,8 +507,15 @@ class AppState:
             await self.broadcast(self.status_message())
 
         elif msg_type == "disconnect":
-            await self.ble.disconnect()
-            self.robot_connected = False
+            try:
+                await self.ble.disconnect()
+            except Exception as exc:
+                await self.log("info", self.msg("disconnect_failed", error=exc))
+            finally:
+                self.robot_connected = False
+                self.clear_pending_scan()
+                self.clear_pending_check()
+                self.cancel_ponder()
             await self.log("info", self.msg("disconnected"))
             await self.broadcast(self.status_message())
 
@@ -367,10 +528,13 @@ class AppState:
             if not await self.require_robot_connection("action.scan_board"):
                 return
             self.pending_scan_sync = True
+            self.pending_check = False
+            self.arm_pending_timeout("scan")
             # Zettenlijst meteen leegmaken; bord volgt na de FEN van de arm.
             self.game.clear_moves()
             if self.game.replay_loaded:
                 self.game.clear_replay()
+                await self.stop_replay_auto(log_stop=False)
                 await self.broadcast(self.game.replay_state())
             await self.broadcast(self.game.render(orientation=self.human_color, reset=True))
             await self.send_to_arm("scan board")
@@ -383,20 +547,25 @@ class AppState:
                 await self.log("info", self.msg("wait_current_scan"))
                 return
             self.pending_check = True
+            self.arm_pending_timeout("check")
             await self.send_to_arm("scan board")
             await self.log("info", self.msg("check_started"))
 
         elif msg_type == "load_pgn":
-            result = self.game.load_pgn(str(msg.get("pgn", "")))
+            pgn_text = str(msg.get("pgn", ""))
+            if len(pgn_text) > MAX_PGN_CHARS:
+                await self.log("info", self.msg("pgn_too_large", max=MAX_PGN_CHARS))
+                await self.broadcast({"type": "replay_error", "reason": self.msg("pgn_too_large", max=MAX_PGN_CHARS)})
+                return
+            result = self.game.load_pgn(pgn_text)
             if not result.get("ok"):
                 await self.log("info", self.msg("pgn_load_failed", reason=result.get("reason")))
                 await self.broadcast({"type": "replay_error", "reason": result.get("reason")})
                 return
             self.cancel_ponder()
             self.last_fen = None
-            self.pending_scan_sync = False
-            self.pending_scan_keep_history = False
-            self.pending_check = False
+            self.clear_pending_scan()
+            self.clear_pending_check()
             headers = result.get("headers", {})
             await self.log(
                 "info",
@@ -409,33 +578,37 @@ class AppState:
             )
             await self.broadcast(self.game.render(orientation=self.human_color, reset=True))
             await self.broadcast(self.game.replay_state())
+            await self.stop_replay_auto(log_stop=False)
 
         elif msg_type == "replay_next":
             if not await self.require_robot_connection("action.replay_next"):
                 return
-            result = self.game.replay_next()
-            if not result.get("ok"):
-                await self.log("info", self.msg("replay_info", reason=result.get("reason")))
-                await self.broadcast(self.game.replay_state())
+            if self.replay_auto_running:
+                await self.log("info", self.msg("replay_auto_busy"))
                 return
-            await self.send_to_arm(f"move {result['uci']}")
-            await self.log(
-                "info",
-                self.msg(
-                    "replay_move",
-                    index=result["index"],
-                    total=result["total"],
-                    san=result["san"],
-                    uci=result["uci"],
-                ),
-            )
-            if result.get("done"):
-                await self.log("info", self.msg("replay_done"))
-            await self.broadcast(self.board_message())
-            await self.broadcast(self.game.replay_state())
-            await self.announce_check_state()
+            await self.execute_replay_move()
+
+        elif msg_type == "replay_auto_start":
+            if not await self.require_robot_connection("action.replay_next"):
+                return
+            if not self.game.replay_active:
+                await self.log("info", self.msg("replay_auto_not_active"))
+                return
+            if self.replay_auto_running:
+                await self.log("info", self.msg("replay_auto_busy"))
+                return
+            try:
+                interval = float(msg.get("interval", 10))
+            except (TypeError, ValueError):
+                interval = 10.0
+            interval = max(1.0, min(300.0, interval))
+            await self.start_replay_auto(interval)
+
+        elif msg_type == "replay_auto_stop":
+            await self.stop_replay_auto()
 
         elif msg_type == "replay_stop":
+            await self.stop_replay_auto(log_stop=False)
             self.game.stop_replay()
             await self.log("info", self.msg("replay_stopped"))
             await self.broadcast(self.game.replay_state())
@@ -500,10 +673,13 @@ class AppState:
             await self.send_to_arm(f"set flip board {flip}")
             # Na flip board altijd eerst opnieuw synchroniseren.
             self.pending_scan_sync = True
+            self.pending_check = False
             self.last_fen = None
+            self.arm_pending_timeout("scan")
             if self.game.replay_loaded:
                 # Verder spelen na een (gedeeltelijk) nagespeelde PGN:
                 # zettenlijst en stelling behouden.
+                await self.stop_replay_auto(log_stop=False)
                 self.game.stop_replay()
                 self.pending_scan_keep_history = True
                 await self.broadcast(self.game.replay_state())
@@ -514,7 +690,12 @@ class AppState:
             await self.log("info", self.msg("scan_after_side"))
 
         elif msg_type == "set_engine":
-            settings = self.engine.update_settings(msg.get("settings", {}))
+            try:
+                settings = self.engine.update_settings(msg.get("settings", {}) or {})
+            except ValueError as exc:
+                await self.log("info", self.msg("engine_settings_invalid", error=exc))
+                await self.broadcast(self.engine_message())
+                return
             self.game.set_turn(settings.get("turn", "b"))
             await self.log("info", self.msg("engine_updated", settings=settings))
             await self.broadcast(self.engine_message())
@@ -556,7 +737,16 @@ async def websocket_endpoint(ws: WebSocket):
                 msg = json.loads(raw)
             except json.JSONDecodeError:
                 continue
-            await state.handle_message(msg)
+            if not isinstance(msg, dict):
+                continue
+            try:
+                await state.handle_message(msg)
+            except Exception as exc:
+                logger.exception("Fout bij verwerken van WebSocket-bericht: %s", exc)
+                try:
+                    await state.log("info", state.msg("handler_error", error=exc))
+                except Exception:
+                    pass
     except WebSocketDisconnect:
         pass
     finally:
@@ -565,7 +755,20 @@ async def websocket_endpoint(ws: WebSocket):
 
 @app.get("/")
 async def index():
-    return FileResponse(STATIC_DIR / "index.html")
+    html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    version = get_version()
+    html = re.sub(
+        r'(id="app-version" class="app-version">)v[^<]*',
+        rf"\1v{version}",
+        html,
+        count=1,
+    )
+    return Response(content=html, media_type="text/html; charset=utf-8")
+
+
+@app.get("/api/version")
+async def api_version():
+    return {"version": get_version()}
 
 
 @app.get("/download/pgn")
@@ -589,7 +792,10 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
 def main():
-    uvicorn.run("app.server:app", host="127.0.0.1", port=8000, loop="asyncio", reload=True)
+    import os
+
+    reload = os.environ.get("CYNUS_RELOAD", "").strip().lower() in ("1", "true", "yes")
+    uvicorn.run("app.server:app", host="127.0.0.1", port=8000, loop="asyncio", reload=reload)
 
 
 if __name__ == "__main__":

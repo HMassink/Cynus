@@ -46,6 +46,7 @@ const lastState = {
   board: null,
   side: null,
   replay: null,
+  replayAuto: { running: false, interval: 10 },
   check: null,
   engineMove: null,
   candidates: null,
@@ -69,7 +70,12 @@ function connectWs() {
   };
 
   ws.onmessage = (event) => {
-    const msg = JSON.parse(event.data);
+    let msg;
+    try {
+      msg = JSON.parse(event.data);
+    } catch (_) {
+      return;
+    }
     switch (msg.type) {
       case "status": onStatus(msg); break;
       case "devices": onDevices(msg.devices); break;
@@ -82,10 +88,15 @@ function connectWs() {
       case "move_forced": onMoveForced(msg); break;
       case "replay": onReplay(msg); break;
       case "replay_error": onReplayError(msg); break;
+      case "replay_auto": onReplayAuto(msg); break;
       case "auto": $("auto-mode").checked = msg.enabled; break;
       case "side": onSide(msg); break;
       case "log": addLog(msg.dir, msg.text); break;
     }
+  };
+
+  ws.onerror = () => {
+    /* onclose handelt reconnect af */
   };
 }
 
@@ -99,8 +110,15 @@ function send(msg) {
 
 // -- Verbinding & apparaten ----------------------------------------------------
 
+function setAppVersion(version) {
+  if (!version) return;
+  const el = $("app-version");
+  if (el) el.textContent = `v${version}`;
+}
+
 function onStatus(msg) {
   lastState.status = msg;
+  setAppVersion(msg.version);
   const dot = $("ble-dot");
   const label = $("ble-status");
   if (msg.connected) {
@@ -111,6 +129,17 @@ function onStatus(msg) {
     dot.classList.remove("on");
     label.textContent = t("arm.disconnected");
     $("btn-disconnect").disabled = true;
+  }
+}
+
+async function loadVersion() {
+  try {
+    const res = await fetch("/api/version");
+    if (!res.ok) return;
+    const data = await res.json();
+    setAppVersion(data.version);
+  } catch (_) {
+    /* negeer; WebSocket-status kan alsnog vullen */
   }
 }
 
@@ -361,6 +390,8 @@ function onReplay(msg) {
   const hint = $("replay-hint");
   const btnNext = $("btn-replay-next");
   const btnStop = $("btn-replay-stop");
+  const btnAuto = $("btn-replay-auto");
+  const btnAutoStop = $("btn-replay-auto-stop");
 
   if (!msg.loaded) {
     info.classList.add("hidden");
@@ -369,6 +400,8 @@ function onReplay(msg) {
     hint.classList.add("hidden");
     btnNext.disabled = true;
     btnStop.disabled = true;
+    btnAuto.disabled = true;
+    btnAutoStop.disabled = true;
     return;
   }
 
@@ -413,9 +446,23 @@ function onReplay(msg) {
   progress.textContent = t("replay.progress", { x: msg.index, n: msg.total });
 
   const done = msg.index >= msg.total;
-  btnNext.disabled = !msg.active || done;
-  btnStop.disabled = !msg.active;
-  hint.classList.toggle("hidden", msg.active && !done);
+  const autoRunning = !!(lastState.replayAuto && lastState.replayAuto.running);
+  btnNext.disabled = !msg.active || done || autoRunning;
+  btnStop.disabled = !msg.active && !autoRunning;
+  btnAuto.disabled = !msg.active || done || autoRunning;
+  btnAutoStop.disabled = !autoRunning;
+  hint.classList.toggle("hidden", (msg.active || autoRunning) && !done);
+}
+
+function onReplayAuto(msg) {
+  lastState.replayAuto = {
+    running: !!msg.running,
+    interval: msg.interval != null ? msg.interval : 10,
+  };
+  if (msg.interval != null) {
+    $("replay-interval").value = String(msg.interval);
+  }
+  if (lastState.replay) onReplay(lastState.replay);
 }
 
 function onReplayError(msg) {
@@ -447,6 +494,8 @@ function loadPgnFile() {
 
 // -- Console ---------------------------------------------------------------------
 
+const MAX_CONSOLE_LINES = 500;
+
 function addLog(dir, text) {
   const line = document.createElement("div");
   line.className = `line ${dir}`;
@@ -458,6 +507,9 @@ function addLog(dir, text) {
   line.appendChild(document.createTextNode(prefix + text));
   const consoleEl = $("console");
   consoleEl.appendChild(line);
+  while (consoleEl.children.length > MAX_CONSOLE_LINES) {
+    consoleEl.removeChild(consoleEl.firstChild);
+  }
   consoleEl.scrollTop = consoleEl.scrollHeight;
 }
 
@@ -554,6 +606,7 @@ function escapeHtml(text) {
 
 function init() {
   applyLanguage();
+  loadVersion();
   initTestPanel();
   renderMoveList(null, []);
   applyBoardSize($("board-size").value);
@@ -614,6 +667,13 @@ function init() {
   });
   $("btn-replay-next").addEventListener("click", () => send({ type: "replay_next" }));
   $("btn-replay-stop").addEventListener("click", () => send({ type: "replay_stop" }));
+  $("btn-replay-auto").addEventListener("click", () => {
+    const interval = Number($("replay-interval").value) || 10;
+    send({ type: "replay_auto_start", interval });
+  });
+  $("btn-replay-auto-stop").addEventListener("click", () => {
+    send({ type: "replay_auto_stop" });
+  });
   $("move-input").addEventListener("keydown", (e) => {
     if (e.key === "Enter") $("btn-move-send").click();
   });

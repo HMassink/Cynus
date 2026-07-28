@@ -36,6 +36,14 @@ MESSAGES: dict[str, dict[str, str]] = {
         "nl": "Verbinden mislukt: {error}",
         "en": "Connecting failed: {error}",
     },
+    "connect_no_address": {
+        "nl": "Geen apparaatadres opgegeven",
+        "en": "No device address provided",
+    },
+    "disconnect_failed": {
+        "nl": "Verbreken mislukt: {error}",
+        "en": "Disconnect failed: {error}",
+    },
     "disconnected": {
         "nl": "Verbinding verbroken",
         "en": "Disconnected",
@@ -47,6 +55,30 @@ MESSAGES: dict[str, dict[str, str]] = {
     "send_failed": {
         "nl": "Versturen mislukt: {error}",
         "en": "Sending failed: {error}",
+    },
+    "handler_error": {
+        "nl": "Interne fout bij opdracht: {error}",
+        "en": "Internal error handling command: {error}",
+    },
+    "pending_scan_timeout": {
+        "nl": "Timeout: geen FEN ontvangen na scan board (30s) – sync geannuleerd",
+        "en": "Timeout: no FEN received after scan board (30s) – sync cancelled",
+    },
+    "pending_check_timeout": {
+        "nl": "Timeout: geen FEN ontvangen voor controle (30s)",
+        "en": "Timeout: no FEN received for check (30s)",
+    },
+    "robot_move_busy": {
+        "nl": "Robotzet bezig; wacht tot Stockfish klaar is",
+        "en": "Robot move in progress; wait until Stockfish finishes",
+    },
+    "engine_settings_invalid": {
+        "nl": "Ongeldige engine-instelling: {error}",
+        "en": "Invalid engine setting: {error}",
+    },
+    "pgn_too_large": {
+        "nl": "PGN te groot (max. {max} tekens)",
+        "en": "PGN too large (max. {max} characters)",
     },
     # -- acties (ingevuld in no_connection) -----------------------------------
     "action.send_move": {"nl": "zet versturen", "en": "send move"},
@@ -224,6 +256,26 @@ MESSAGES: dict[str, dict[str, str]] = {
     "replay_stopped": {
         "nl": "Naspelen gestopt. Kies je kleur om verder te spelen tegen Stockfish.",
         "en": "Replay stopped. Choose your color to continue playing against Stockfish.",
+    },
+    "replay_auto_started": {
+        "nl": "Automatisch naspelen gestart (elke {seconds}s een zet)",
+        "en": "Automatic replay started (one move every {seconds}s)",
+    },
+    "replay_auto_stopped": {
+        "nl": "Automatisch naspelen gestopt",
+        "en": "Automatic replay stopped",
+    },
+    "replay_auto_finished": {
+        "nl": "Automatisch naspelen voltooid",
+        "en": "Automatic replay finished",
+    },
+    "replay_auto_busy": {
+        "nl": "Automatisch naspelen loopt al",
+        "en": "Automatic replay is already running",
+    },
+    "replay_auto_not_active": {
+        "nl": "Geen actieve PGN-replay om automatisch na te spelen",
+        "en": "No active PGN replay to play automatically",
     },
     # -- game.py: validatie en PGN-redenen ------------------------------------------
     "invalid_fen": {

@@ -8,7 +8,10 @@
 </head>
 <body>
   <header>
-    <h1 data-i18n="app.title">CYNUS Schaakarm</h1>
+    <h1 class="header-brand">
+      <span data-i18n="app.title">CYNUS Schaakarm</span>
+      <span id="app-version" class="app-version">v1.0.0</span>
+    </h1>
     <div class="header-status">
       <span id="server-dot" class="dot" data-i18n-title="title.server" title="Serververbinding"></span>
       <span id="server-status" data-i18n="server.connecting">Server: verbinden...</span>
@@ -40,13 +43,13 @@
         <h2 data-i18n="panel.side">Jouw kleur</h2>
         <p class="hint" data-i18n="side.hint_setup">Stelt flip board in op de arm en de Stockfish-kleur voor de robot.</p>
         <div class="row side-buttons">
-          <button type="button" id="btn-side-white" class="side-btn" data-i18n="btn.side_white">Ik speel wit</button>
-          <button type="button" id="btn-side-black" class="side-btn" data-i18n="btn.side_black">Ik speel zwart</button>
+          <button type="button" id="btn-side-white" class="side-btn" data-i18n="btn.side_white" data-i18n-title="help.side_white" title="Ik speel wit">Ik speel wit</button>
+          <button type="button" id="btn-side-black" class="side-btn" data-i18n="btn.side_black" data-i18n-title="help.side_black" title="Ik speel zwart">Ik speel zwart</button>
         </div>
         <div id="side-status" class="side-status" data-i18n="side.status_default">Huidig: jij wit, robot zwart (standaard)</div>
         <p id="side-hint" class="hint" data-i18n="side.hint_white">Speel je zet op het bord en druk daarna op de klok.</p>
         <div class="row">
-          <button type="button" id="btn-robot-move" data-i18n="btn.robot_move">Laat robot zetten</button>
+          <button type="button" id="btn-robot-move" data-i18n="btn.robot_move" data-i18n-title="help.robot_move" title="Laat robot zetten">Laat robot zetten</button>
         </div>
       </section>
 
@@ -60,7 +63,7 @@
         <div class="settings-grid">
           <label><span data-i18n="label.elo">ELO</span> <input type="number" id="eng-elo" min="500" max="3200" value="2000"></label>
           <label><span data-i18n="label.analysis_depth">Analyse-diepte</span> <input type="number" id="eng-analysis-depth" min="1" max="30" value="15"></label>
-          <label><span data-i18n="label.movetime">Denktijd (ms)</span> <input type="number" id="eng-movetime" min="100" step="100" value="1000"></label>
+          <label><span data-i18n="label.movetime">Denktijd (ms)</span> <input type="number" id="eng-movetime" min="100" step="100" value="5000"></label>
           <label><span data-i18n="label.hash">Hash (MB)</span> <input type="number" id="eng-hash" min="16" max="32768" step="16" value="30720"></label>
           <label><span data-i18n="label.threads">Threads</span> <input type="number" id="eng-threads" min="1" max="64" value="20"></label>
           <label><span data-i18n="label.turn">Aan zet</span>
@@ -74,7 +77,7 @@
           </label>
         </div>
         <div class="row">
-          <button id="btn-engine-apply" data-i18n="btn.apply">Toepassen</button>
+          <button id="btn-engine-apply" data-i18n="btn.apply" data-i18n-title="help.engine_apply" title="Toepassen">Toepassen</button>
           <span id="engine-last-move" class="last-move"></span>
         </div>
         <div id="engine-thinking" class="engine-thinking hidden" data-i18n="engine.thinking">Stockfish denkt na…</div>
@@ -113,7 +116,6 @@
 
     <div class="column">
       <section class="panel" id="panel-board">
-        <h2 data-i18n="panel.board">Bord</h2>
         <div class="board-with-moves">
           <div id="board" class="board-svg" data-size="640" data-i18n-aria="aria.board" aria-label="Schaakbord"></div>
           <div class="moves-panel">
@@ -127,16 +129,15 @@
         <div class="row board-size-row">
           <label for="board-size"><span data-i18n="label.board_size">Bordgrootte</span>
             <select id="board-size">
-              <option value="280" data-i18n="size.small">Klein (280px)</option>
-              <option value="400" data-i18n="size.normal">Normaal (400px)</option>
-              <option value="520" data-i18n="size.large">Groot (520px)</option>
-              <option value="640" selected data-i18n="size.xlarge">Zeer groot (640px)</option>
+              <option value="280" data-i18n="size.small">280px</option>
+              <option value="400" data-i18n="size.normal">400px</option>
+              <option value="640" selected data-i18n="size.xlarge">640px</option>
               <option value="800" data-i18n="size.800">800px</option>
-              <option value="1000" data-i18n="size.xxlarge">Extra groot (1000px)</option>
+              <option value="1000" data-i18n="size.xxlarge">1000px</option>
             </select>
           </label>
-          <button type="button" id="btn-scan-board" data-i18n="btn.scan_board">Scan bord</button>
-          <button type="button" id="btn-check-position" data-i18n="btn.check">Controle</button>
+          <button type="button" id="btn-scan-board" data-i18n="btn.scan_board" data-i18n-title="help.scan_board" title="Scan bord">Scan bord</button>
+          <button type="button" id="btn-check-position" data-i18n="btn.check" data-i18n-title="help.check" title="Controle">Controle</button>
         </div>
         <div id="check-status" class="check-status" data-i18n="check.not_done">Controle: nog niet uitgevoerd</div>
         <div id="board-fen" class="fen-line" data-i18n="board.no_position">Nog geen stelling ontvangen</div>
@@ -170,6 +171,13 @@
           <button id="btn-replay-next" data-i18n="btn.replay_next" disabled>Volgende zet</button>
           <button id="btn-replay-stop" data-i18n="btn.replay_stop" disabled>Stop naspelen</button>
         </div>
+        <div class="row replay-auto-row">
+          <label for="replay-interval"><span data-i18n="label.replay_interval">Interval (s)</span>
+            <input type="number" id="replay-interval" min="1" max="300" step="1" value="10">
+          </label>
+          <button id="btn-replay-auto" data-i18n="btn.replay_auto" disabled>Automatisch naspelen</button>
+          <button id="btn-replay-auto-stop" data-i18n="btn.replay_auto_stop" disabled>Stop automatisch</button>
+        </div>
         <p id="replay-hint" class="hint hidden" data-i18n="replay.hint_continue">Kies bij "Jouw kleur" wit of zwart om vanaf deze stelling verder te spelen tegen Stockfish.</p>
       </section>
     </div>
@@ -182,6 +190,10 @@
       </section>
     </div>
   </main>
+
+  <footer class="site-footer">
+    © 2026 Henk Massink
+  </footer>
 
   <script src="/static/i18n.js"></script>
   <script src="/static/app.js"></script>
