@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CYNUS Schaakarm</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header>
+    <h1 data-i18n="app.title">CYNUS Schaakarm</h1>
+    <div class="header-status">
+      <span id="server-dot" class="dot" data-i18n-title="title.server" title="Serververbinding"></span>
+      <span id="server-status" data-i18n="server.connecting">Server: verbinden...</span>
+      <span class="sep"></span>
+      <span id="ble-dot" class="dot" data-i18n-title="title.ble" title="Bluetooth-verbinding"></span>
+      <span id="ble-status" data-i18n="arm.disconnected">Arm: niet verbonden</span>
+      <span class="sep"></span>
+      <span class="lang-switch">
+        <button type="button" class="lang-btn active" data-lang="nl">NL</button>
+        <button type="button" class="lang-btn" data-lang="en">EN</button>
+      </span>
+    </div>
+  </header>
+
+  <main>
+    <div class="column">
+      <section class="panel" id="panel-connection">
+        <h2 data-i18n="panel.connection">Verbinding</h2>
+        <div class="row">
+          <button id="btn-scan" data-i18n="btn.scan">Scan</button>
+          <button id="btn-disconnect" data-i18n="btn.disconnect" disabled>Verbreek verbinding</button>
+        </div>
+        <ul id="device-list" class="device-list">
+          <li class="placeholder" data-i18n="devices.placeholder">Nog geen apparaten. Klik op "Scan".</li>
+        </ul>
+      </section>
+
+      <section class="panel" id="panel-side">
+        <h2 data-i18n="panel.side">Jouw kleur</h2>
+        <p class="hint" data-i18n="side.hint_setup">Stelt flip board in op de arm en de Stockfish-kleur voor de robot.</p>
+        <div class="row side-buttons">
+          <button type="button" id="btn-side-white" class="side-btn" data-i18n="btn.side_white">Ik speel wit</button>
+          <button type="button" id="btn-side-black" class="side-btn" data-i18n="btn.side_black">Ik speel zwart</button>
+        </div>
+        <div id="side-status" class="side-status" data-i18n="side.status_default">Huidig: jij wit, robot zwart (standaard)</div>
+        <p id="side-hint" class="hint" data-i18n="side.hint_white">Speel je zet op het bord en druk daarna op de klok.</p>
+        <div class="row">
+          <button type="button" id="btn-robot-move" data-i18n="btn.robot_move">Laat robot zetten</button>
+        </div>
+      </section>
+
+      <section class="panel" id="panel-engine">
+        <h2 data-i18n="panel.engine">Engine (Stockfish)</h2>
+        <div id="engine-warning" class="warning hidden"></div>
+        <label class="toggle-row">
+          <input type="checkbox" id="auto-mode" checked>
+          <span data-i18n="engine.auto">Automodus: antwoord automatisch op "get move"</span>
+        </label>
+        <div class="settings-grid">
+          <label><span data-i18n="label.elo">ELO</span> <input type="number" id="eng-elo" min="500" max="3200" value="2000"></label>
+          <label><span data-i18n="label.analysis_depth">Analyse-diepte</span> <input type="number" id="eng-analysis-depth" min="1" max="30" value="15"></label>
+          <label><span data-i18n="label.movetime">Denktijd (ms)</span> <input type="number" id="eng-movetime" min="100" step="100" value="1000"></label>
+          <label><span data-i18n="label.hash">Hash (MB)</span> <input type="number" id="eng-hash" min="16" max="32768" step="16" value="30720"></label>
+          <label><span data-i18n="label.threads">Threads</span> <input type="number" id="eng-threads" min="1" max="64" value="20"></label>
+          <label><span data-i18n="label.turn">Aan zet</span>
+            <select id="eng-turn">
+              <option value="b" selected data-i18n="option.black">Zwart (b)</option>
+              <option value="w" data-i18n="option.white">Wit (w)</option>
+            </select>
+          </label>
+          <label><span data-i18n="label.candidates">Kandidaten</span>
+            <input type="number" id="eng-candidates" min="1" max="10" value="5">
+          </label>
+        </div>
+        <div class="row">
+          <button id="btn-engine-apply" data-i18n="btn.apply">Toepassen</button>
+          <span id="engine-last-move" class="last-move"></span>
+        </div>
+        <div id="engine-thinking" class="engine-thinking hidden" data-i18n="engine.thinking">Stockfish denkt na…</div>
+        <table id="engine-candidates" class="engine-candidates">
+          <thead>
+            <tr><th>#</th><th data-i18n="th.move">Zet</th><th data-i18n="th.score">Score</th><th data-i18n="th.line">Lijn</th></tr>
+          </thead>
+          <tbody>
+            <tr class="empty"><td colspan="4" data-i18n="candidates.empty">Nog geen analyse</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="panel" id="panel-test">
+        <h2 data-i18n="panel.test">Testpaneel: commando's</h2>
+        <div class="row">
+          <select id="cmd-select"></select>
+        </div>
+        <div class="row">
+          <input type="text" id="cmd-param" placeholder="">
+          <button id="btn-cmd-send" data-i18n="btn.send">Verstuur</button>
+        </div>
+        <div class="cmd-preview"><span data-i18n="test.preview">Te versturen:</span> <code id="cmd-preview">–</code></div>
+        <details class="protocol-help">
+          <summary data-i18n="test.arm_messages">Berichten die de arm zelf stuurt</summary>
+          <ul>
+            <li data-i18n-html="proto.fen"><code>fen: &lt;stelling&gt;</code> – bordstand (bij connect, klok of get fen/scan)</li>
+            <li data-i18n-html="proto.get_move"><code>get move</code> – vraagt om een engine-zet (alleen als internal engine uit staat)</li>
+            <li data-i18n-html="proto.new_game"><code>new game</code> – bij dubbelklik op de klokknop</li>
+            <li data-i18n-html="proto.status"><code>robot is &lt;status&gt;</code> – antwoord op get robot status</li>
+            <li data-i18n-html="proto.other"><code>serial ...</code> / batterij / versies – antwoorden op get-commando's</li>
+          </ul>
+        </details>
+      </section>
+    </div>
+
+    <div class="column">
+      <section class="panel" id="panel-board">
+        <h2 data-i18n="panel.board">Bord</h2>
+        <div class="board-with-moves">
+          <div id="board" class="board-svg" data-size="640" data-i18n-aria="aria.board" aria-label="Schaakbord"></div>
+          <div class="moves-panel">
+            <div class="moves-header">
+              <h3 data-i18n="moves.header">Gespeelde zetten</h3>
+              <button type="button" id="btn-download-pgn" class="small" data-i18n="btn.download_pgn">Download PGN</button>
+            </div>
+            <ol id="move-list" class="move-list"></ol>
+          </div>
+        </div>
+        <div class="row board-size-row">
+          <label for="board-size"><span data-i18n="label.board_size">Bordgrootte</span>
+            <select id="board-size">
+              <option value="280" data-i18n="size.small">Klein (280px)</option>
+              <option value="400" data-i18n="size.normal">Normaal (400px)</option>
+              <option value="520" data-i18n="size.large">Groot (520px)</option>
+              <option value="640" selected data-i18n="size.xlarge">Zeer groot (640px)</option>
+              <option value="800" data-i18n="size.800">800px</option>
+              <option value="1000" data-i18n="size.xxlarge">Extra groot (1000px)</option>
+            </select>
+          </label>
+          <button type="button" id="btn-scan-board" data-i18n="btn.scan_board">Scan bord</button>
+          <button type="button" id="btn-check-position" data-i18n="btn.check">Controle</button>
+        </div>
+        <div id="check-status" class="check-status" data-i18n="check.not_done">Controle: nog niet uitgevoerd</div>
+        <div id="board-fen" class="fen-line" data-i18n="board.no_position">Nog geen stelling ontvangen</div>
+      </section>
+
+      <section class="panel" id="panel-move">
+        <h2 data-i18n="panel.move">Handmatige zet</h2>
+        <div class="row">
+          <input type="text" id="move-input" data-i18n-placeholder="move.placeholder" placeholder="bijv. e2e4" maxlength="5">
+          <button id="btn-move-send" data-i18n="btn.move_send">Voer zet uit</button>
+        </div>
+        <div id="move-validation" class="move-validation hidden"></div>
+        <div class="row">
+          <button id="btn-force-move" class="hidden" data-i18n="btn.force">Toch uitvoeren</button>
+        </div>
+      </section>
+
+      <section class="panel" id="panel-replay">
+        <h2 data-i18n="panel.replay">PGN naspelen</h2>
+        <p class="hint" data-i18n="replay.hint_top">Laad een partij vanuit de beginstand en laat de robot de zetten uitvoeren. Zet de stukken eerst in de beginstand.</p>
+        <div class="row">
+          <input type="file" id="pgn-file" accept=".pgn">
+          <button id="btn-pgn-load" data-i18n="btn.pgn_load">Laad PGN</button>
+        </div>
+        <textarea id="pgn-text" class="pgn-text" rows="4" data-i18n-placeholder="pgn.placeholder" placeholder="...of plak hier PGN-tekst en klik op Laad PGN"></textarea>
+        <div id="replay-error" class="warning hidden"></div>
+        <div id="replay-info" class="replay-info hidden"></div>
+        <div id="replay-moves" class="replay-moves hidden"></div>
+        <div id="replay-progress" class="replay-progress hidden"></div>
+        <div class="row">
+          <button id="btn-replay-next" data-i18n="btn.replay_next" disabled>Volgende zet</button>
+          <button id="btn-replay-stop" data-i18n="btn.replay_stop" disabled>Stop naspelen</button>
+        </div>
+        <p id="replay-hint" class="hint hidden" data-i18n="replay.hint_continue">Kies bij "Jouw kleur" wit of zwart om vanaf deze stelling verder te spelen tegen Stockfish.</p>
+      </section>
+    </div>
+
+    <div class="column">
+      <section class="panel grow" id="panel-console">
+        <h2 data-i18n="panel.console">Console (rx/tx)</h2>
+        <div id="console" class="console"></div>
+        <button id="btn-console-clear" class="small" data-i18n="btn.console_clear">Wis console</button>
+      </section>
+    </div>
+  </main>
+
+  <script src="/static/i18n.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

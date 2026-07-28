@@ -1,0 +1,132 @@
+Cynus BLE protocol v3.5
+1 notes
+1.1:the protocol is base on Bluetooth LE 5.1, the Characteristic of
+Cynus’ bluetooth which is used for communication is "FFF1"
+
+1.2:the protocol is a UCI similar protocol, all the commands end with
+‘\n’.
+2 commands
+2.1: playing related commands
+2.1.1:set internal engine on/off
+when use external engine to control the robotic arm, you need to send
+"set internal engine off\n" first to disable the built-in stockfish, then
+each time you press the clock button on chessboard, Cynus will send
+you a position string along with a “get move\n” command.
+otherwise the only the position string of the board will be sent out
+without “get move\n”, Do not control the arm by “move AxBy\n”
+command in this case, because the built-in engine will control the
+robotic arm.
+The built-in stockfish will be enabled automatically when the BLE
+connection gets broken.
+2.1.2: set flip board on/off
+Physically the row 8 is on the robot side, so the robot will play black
+according to the rules. By sending the command “set flip board on\n”
+the board will be flipped the board logically, which means the row 1 will
+be on the robot side, so that the robot can play the white chess pieces.
+Note: It is changed by the color of the promotion queen each time the
+robot gets connected by the board with the firmware later than 1.3.0.
+2.1.3: set time 10 / unlimited
+when set time unlimited, emoji shows on the screen. otherwise,
+countdown timer shows on the screen.
+2.1.4: get fen
+By the default Cynus will push the current position to you when you
+connect to it by BLE. And push the position each time you press the
+clock button.
+But you can still ask the Cynus to send you the current position by this
+command.
+The position string in red is sent out when the Cynus gets connected.
+And the position string in green is sent out on the command “get fen\
+r\n”
+Note: this command only works when the board is connected with
+robot, otherwise no return for this command. And the robot only return
+the FEN string it scanned last time, this command doesn’t trigger a
+board scanning. If you want the robot scan the board please use the
+command “scan board\n”.
+2.1.5: move AxBy
+Cynus will move the pieces from Ax to By on the board by receiving this
+command. And both upper case “move AxBy\n” or lower case
+“move axby\n” are supported.
+For castling, only the king’s move is needed to send to the robot, for
+example “move e8g8\n” will make the robot to make a short castling
+when it play black.
+For en-passant, only the move of pawn is needed to send to the robot.
+For promotion, the promotion is needed to sent to the robot. For
+example “move h2h1q”will promote the pawn at h2 with the queen.
+2.1.6: set robot turn
+This command is same as pressing the clock button on the chessboard,
+robot will scan the board after receiving the command, and send the
+FEN string of the board out by BLE after finishing the scanning. If the
+internal engine is used, the robot will make the move itself.
+2.1.7: scan board
+Different from the command “set robot turn\n”, this command only
+let the robot scan the board and send the FEN string of the board out
+by BLE. No move is made.
+2.1.8: set wait minutes
+This command is only for testing, it will change the time that robot
+goes into sleeping mode. By default the value is 10 minutes, you can
+use the command “set wait minutes 30\n” to set the value to 30
+minutes.
+2.1.9: get wait minutes
+Robot will return the wait time;
+2.1.10: get robot status
+Robot will return its status after receiving this command, the status
+includes starting, scanning, thinking, waiting, moving, idling, sleeping,
+upgrading. For example, robot will return “robot is moving\n” when
+it is moving the chess pieces.
+2.1.11: play audio
+Ask the robot to play the corresponding audio. For example “play
+audio error\n” will ask the robot to play audio “error”. The audio
+which is supported are: “check”, “checkmate”, “error”.
+2.1.12: play text
+Ask the robot to display the text on the screen. For example, “play txt
+e2d2\n” will ask the robot to display the “e2d2” on the bottom of
+the screen.
+Please be noted that the text should be less than 10 characters, if more
+than 10 characters is sent by this command, on the first 10 characters
+will be show on the screen.
+2.1.12: sync time
+“sync time bb:bb ww:ww\n”will change the time for black and white
+when the robot is set to time mode. “bb:bb” set the time for black
+and “ww:ww”set the time for white. For example “sync time 5:03
+7:22\” will set the time 5:03 for black and 7:22 for white.
+Usually the time on the robot is different from the time on the app or
+the platform like chess.com or lichess, This command is used to sync
+the time between robot and your app.
+2.1.13: new game
+When the user double click the click button, a command “new
+game\” will be send out via BLE.
+2.2 other commands:
+2.2.1: force reset
+this command will reset the arm to the state which is ready for board
+scanning.
+2.2.2: force fold
+this command will fold the arm to the state which is ready for storage.
+2.2.3: force grab
+Move the magnet in the gripper down to grab chess piece.
+2.2.4: force release
+Move the magnet in the gripper up to release chess piece.
+2.2.5:get serial number
+Cynus will return the serial string like:"serial 14d099f4901abd2d\n", it is
+a 16 bytes string.
+2.2.6:get battery
+Cynus will return the voltage of the Cynus. there is a two cell li-po
+battery embedded, the voltage is 8.4V when full, and 7.4v when empty.
+If the robot is charging, the information will be ended with “+”,
+otherwise it will be ended with “-”.
+2.2.7:get software version
+Cynsu will return it’s software version
+2.2.8:get hardware version
+Cynsu will return it’s hardware version
+2.2.9: move AxBy s t
+This command is different from the command “move AxBy\n”, it is
+force mode of move command. By specifying the chess piece at the
+starting position with ‘s’ and the chess piece at destination with
+‘t’ in this command, the robot will not check if there are
+corresponding chess piece on the certain position and ignore the
+special move check like en-passant or castling. It will capture the ‘t’
+from By first, then move the ‘s’ from Ax to By, even if there is no
+‘s’ on the Ax and ‘t’ on the board. And if the‘t’is not specified,
+it will move ‘s’ from Ax to By directly, even if there is a chess piece at
+By on the board.
+This command is designed for test only. Or if you want to make some
+special move without trigger the normal special move
