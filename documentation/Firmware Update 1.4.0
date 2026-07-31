@@ -1,0 +1,20 @@
+Hi everyone,
+
+Thanks a lot for your support, we have updated the firmware to the version v1.4.0, you can find it in the upgrade page of Cynus Chess App.
+
+Here are the main changes of the v1.4.0 firmware from the v1.3.9.
+
+1: Change the text on warning of illegal move, a dedicated position of the warning information is used instead of the chess piece type. For example if you move the pawn from H2 to H5, the robot will show H5 on the screen with the audio “error”.
+2: Fix the bug in the move command. the move command may go wrong if you use command “sync time xx:xx yy:yy” along with the move command in the old version.
+3: Add double click to the clock button. The error will be clear if the button is double clicked in case the robot enter an error loop caused by a wrong recognition.
+4: Decrease the search depth of engine of the low level to lower the difficulty at low level.
+5: Optimize the control algorithm of robot arm, reduce the shake when the arm extends.
+6: Optimize the spot detection algorithm in the storage area, improve the issue that the robot may drop the chess piece it captures off the board when there is still space left on the storage area.
+7: Optimize the promotion pieces detection algorithm in the promotion area.
+8: Add a protection for the internal engine thread, restart the engine in time in case it crashes.
+9: Change the image on the color detection when the robot play without App. If the robot detect a white queen, a “Cynus play white” image will show on screen, otherwise “Cynus play black” will show on the screen.
+10：Optimize the chess piece recognition algorithm, reduce the fake detection possibility.
+11: Add “set timer mode web/robot\n” in the protocol to set the time sync with the web platform like lichess or chess.com.
+12: add command “set volume *\n” in the protocol. mute the robot by command “set volume 0\n” and max the volume by command “set volume 100\n”.
+13: change the command “set time X Y\n” with the increment seconds in ‘Y’. For exmaple if you send command “set time 5 3\n” the time will increase 3 second after each move.
+

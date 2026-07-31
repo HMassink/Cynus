@@ -33,6 +33,7 @@ stockfish*.exe
 *.nnue
 
 # Local / generated
-*.pgn
+pgn/*.pgn
+!pgn/.gitkeep
 *.log
 __pycache__/

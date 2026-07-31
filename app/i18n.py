@@ -72,6 +72,14 @@ MESSAGES: dict[str, dict[str, str]] = {
         "nl": "Robotzet bezig; wacht tot Stockfish klaar is",
         "en": "Robot move in progress; wait until Stockfish finishes",
     },
+    "not_robot_turn": {
+        "nl": "Geen robotzet: het is de beurt van de speler (of scan kwam niet overeen). Stockfish speelt niet voor jouw kleur.",
+        "en": "No robot move: it is the player's turn (or scan did not match). Stockfish will not move for your color.",
+    },
+    "get_move_after_mismatch": {
+        "nl": "get move genegeerd: laatste scan week af van de app-stelling",
+        "en": "get move ignored: last scan differed from the app position",
+    },
     "engine_settings_invalid": {
         "nl": "Ongeldige engine-instelling: {error}",
         "en": "Invalid engine setting: {error}",
@@ -89,10 +97,19 @@ MESSAGES: dict[str, dict[str, str]] = {
     "action.robot_move": {"nl": "robot laten zetten", "en": "let the robot move"},
     "action.replay_next": {"nl": "replayzet uitvoeren", "en": "execute replay move"},
     "action.force_move": {"nl": "override-zet versturen", "en": "send override move"},
+    "action.toon_text": {"nl": "tekst op armscherm tonen", "en": "show text on arm screen"},
     # -- spel / bord -----------------------------------------------------------
     "new_game": {
         "nl": "Nieuw spel – partij gereset",
         "en": "New game – game reset",
+    },
+    "new_game_local_only": {
+        "nl": "Nieuw spel alleen in de app (geen verbinding met de arm)",
+        "en": "New game in the app only (no connection to the arm)",
+    },
+    "pgn_archived": {
+        "nl": "Partij opgeslagen als {file} (map pgn/)",
+        "en": "Game saved as {file} (pgn/ folder)",
     },
     "check_ok": {
         "nl": "Controle OK: robotstelling komt overeen met de app/engine",
@@ -123,8 +140,8 @@ MESSAGES: dict[str, dict[str, str]] = {
         "en": "Board synchronized (new/start)",
     },
     "board_gap": {
-        "nl": "Bord bijgewerkt zonder zetpad; zettenhistorie behouden",
-        "en": "Board updated without a move path; move history kept",
+        "nl": "Scan wijkt af van de app/Stockfish-stelling; app blijft leidend (bord niet overgenomen)",
+        "en": "Scan differs from the app/Stockfish position; app stays authoritative (board not adopted)",
     },
     "move_detected": {
         "nl": "Zet gedetecteerd: {move}",
@@ -134,9 +151,33 @@ MESSAGES: dict[str, dict[str, str]] = {
         "nl": "Automatische controle FOUT: scan wijkt af van de verwachte stelling",
         "en": "Automatic check MISMATCH: scan differs from the expected position",
     },
+    "verify_started": {
+        "nl": "Controle na robotzet: wacht tot arm klaar is, daarna scan…",
+        "en": "Post-move check: waiting for arm idle, then scan…",
+    },
+    "verify_ok": {
+        "nl": "Controle na robotzet OK: robot = app/Stockfish",
+        "en": "Post-move check OK: robot matches app/Stockfish",
+    },
+    "verify_mismatch_retry": {
+        "nl": "Controle FOUT na robotzet – force-move opnieuw: {command}",
+        "en": "Post-move check MISMATCH – re-sending force move: {command}",
+    },
+    "verify_failed": {
+        "nl": "Controle mislukt: robot wijkt nog af van app (verwacht {expected}, scan {scanned})",
+        "en": "Post-move check failed: robot still differs from app (expected {expected}, scan {scanned})",
+    },
+    "verify_scan_timeout": {
+        "nl": "Timeout: geen FEN ontvangen bij controle na robotzet",
+        "en": "Timeout: no FEN received during post-move check",
+    },
+    "verify_apply_failed": {
+        "nl": "Kon robotzet niet lokaal toepassen: {reason}",
+        "en": "Could not apply robot move locally: {reason}",
+    },
     "scan_board_sent": {
-        "nl": "scan board verstuurd – wacht op FEN",
-        "en": "scan board sent – waiting for FEN",
+        "nl": "scan board verstuurd – wacht op FEN (zettenlijst blijft)",
+        "en": "scan board sent – waiting for FEN (move list kept)",
     },
     "wait_current_scan": {
         "nl": "Wacht eerst tot de lopende bordscan klaar is",
@@ -181,6 +222,10 @@ MESSAGES: dict[str, dict[str, str]] = {
         "nl": "Stockfish rondt pondering af ({reason})...",
         "en": "Stockfish is finishing pondering ({reason})...",
     },
+    "engine_no_move": {
+        "nl": "Geen zet gevonden voor stelling: {fen}",
+        "en": "No move found for position: {fen}",
+    },
     "engine_analyzing": {
         "nl": "Stockfish analyseert ({reason})...",
         "en": "Stockfish is analyzing ({reason})...",
@@ -188,6 +233,22 @@ MESSAGES: dict[str, dict[str, str]] = {
     "engine_chooses": {
         "nl": "Stockfish kiest {move} ({score})",
         "en": "Stockfish chooses {move} ({score})",
+    },
+    "engine_calculating": {
+        "nl": "Stockfish berekent geforceerd de beste zet voor {turn}...",
+        "en": "Stockfish is forcibly calculating the best move for {turn}...",
+    },
+    "engine_calc_no_arm": {
+        "nl": "Beste zet {move} (niet naar arm gestuurd – geen verbinding)",
+        "en": "Best move {move} (not sent to arm – not connected)",
+    },
+    "color.white": {"nl": "wit", "en": "white"},
+    "color.black": {"nl": "zwart", "en": "black"},
+    "display.turn_white": {"nl": "Wit", "en": "White"},
+    "display.turn_black": {"nl": "Zwart", "en": "Black"},
+    "display_text_too_long": {
+        "nl": "Tekst te lang voor armscherm ({length} > 10 tekens) – niet verstuurd",
+        "en": "Text too long for arm screen ({length} > 10 characters) – not sent",
     },
     "engine_updated": {
         "nl": "Engine-instellingen bijgewerkt: {settings}",

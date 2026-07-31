@@ -34,12 +34,12 @@ _FALLBACK_SETTINGS = {
 }
 
 SETTING_BOUNDS: dict[str, tuple[int, int]] = {
-    "elo": (1320, 3190),
+    "elo": (1000, 4000),
     "analysis_depth": (1, 40),
     "movetime": (100, 300_000),
     "candidates": (1, 10),
     "hash": (1, 65_536),
-    "threads": (1, 64),
+    "threads": (2, 40),
 }
 
 _DEFAULTS_FILE = Path(__file__).resolve().parent.parent / "engine_defaults.json"
@@ -186,7 +186,26 @@ class Engine:
         if len(parts) >= 4:
             return text
         placement = parts[0] if parts else text
-        return f"{placement} {self.settings['turn']} - - 0 15"
+        return f"{placement} {self.settings['turn']} - - 0 1"
+
+    def normalize_fen(self, fen_or_placement: str) -> str:
+        """Normaliseer naar een FEN die Stockfish kan laden.
+
+        De stockfish-Pythonwrapper heeft een strikte syntaxcheck die legale
+        stellingen kan afwijzen (o.a. halfmove vs fullmove). We valideren
+        daarom met python-chess en zetten klokvelden conservatief.
+        """
+        fen = self.full_fen(fen_or_placement)
+        try:
+            board = chess.Board(fen)
+        except ValueError as exc:
+            raise ValueError(f"Ongeldige stelling: {fen}") from exc
+        if board.king(chess.WHITE) is None or board.king(chess.BLACK) is None:
+            raise ValueError(f"Stelling mist een koning: {fen}")
+        # Analyse hoeft geen 50-zetten/fullmove-historie; voorkom wrapper-reject.
+        board.halfmove_clock = 0
+        board.fullmove_number = 1
+        return board.fen()
 
     @staticmethod
     def _format_score(centipawn: Optional[int], mate: Optional[int]) -> str:
@@ -217,15 +236,22 @@ class Engine:
         with self._lock:
             if self._sf is None:
                 raise RuntimeError(self.error or "Engine niet beschikbaar")
-            fen = self.full_fen(fen_placement)
+            try:
+                fen = self.normalize_fen(fen_placement)
+            except ValueError as exc:
+                raise RuntimeError(str(exc)) from exc
             num = max(1, min(10, int(self.settings.get("candidates", 5))))
             try:
-                self._sf.set_fen_position(fen)
+                # do_validation=False: wrapper-syntaxcheck is te streng; wij
+                # hebben al via python-chess genormaliseerd.
+                self._sf.set_fen_position(fen, do_validation=False)
                 self._sf.set_depth(int(self.settings["analysis_depth"]))
                 raw = self._sf.get_top_moves(num, verbose=True)
                 # Gespeelde zet volgt skill/ELO; kandidaten zijn full-strength analyse.
-                self._sf.set_fen_position(fen)
+                self._sf.set_fen_position(fen, do_validation=False)
                 played = self._sf.get_best_move_time(int(self.settings["movetime"]))
+            except ValueError as exc:
+                raise RuntimeError(f"Ongeldige stelling voor Stockfish: {fen}") from exc
             except StockfishException as exc:
                 logger.warning("StockfishException: %s; engine wordt herstart", exc)
                 self._start()

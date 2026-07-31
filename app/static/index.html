@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>CYNUS Schaakarm</title>
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/style.css?v=__APP_VERSION__">
 </head>
 <body>
   <header>
@@ -47,6 +47,9 @@
           <button type="button" id="btn-side-black" class="side-btn" data-i18n="btn.side_black" data-i18n-title="help.side_black" title="Ik speel zwart">Ik speel zwart</button>
         </div>
         <div id="side-status" class="side-status" data-i18n="side.status_default">Huidig: jij wit, robot zwart (standaard)</div>
+        <div id="side-flip-warning" class="side-flip-warning warning hidden" role="alert" data-i18n="side.flip_warning">
+          Let op: op het fysieke bord zijn wit en zwart omgedraaid (flip board aan). Zet de stukken zo dat jouw zwarte stukken aan jouw kant staan.
+        </div>
         <p id="side-hint" class="hint" data-i18n="side.hint_white">Speel je zet op het bord en druk daarna op de klok.</p>
         <div class="row">
           <button type="button" id="btn-robot-move" data-i18n="btn.robot_move" data-i18n-title="help.robot_move" title="Laat robot zetten">Laat robot zetten</button>
@@ -61,11 +64,11 @@
           <span data-i18n="engine.auto">Automodus: antwoord automatisch op "get move"</span>
         </label>
         <div class="settings-grid">
-          <label><span data-i18n="label.elo">ELO</span> <input type="number" id="eng-elo" min="500" max="3200" value="2000"></label>
+          <label><span data-i18n="label.elo">ELO</span> <input type="number" id="eng-elo" min="1000" max="4000" value="2000"></label>
           <label><span data-i18n="label.analysis_depth">Analyse-diepte</span> <input type="number" id="eng-analysis-depth" min="1" max="30" value="15"></label>
           <label><span data-i18n="label.movetime">Denktijd (ms)</span> <input type="number" id="eng-movetime" min="100" step="100" value="5000"></label>
           <label><span data-i18n="label.hash">Hash (MB)</span> <input type="number" id="eng-hash" min="16" max="32768" step="16" value="30720"></label>
-          <label><span data-i18n="label.threads">Threads</span> <input type="number" id="eng-threads" min="1" max="64" value="20"></label>
+          <label><span data-i18n="label.threads">Threads</span> <input type="number" id="eng-threads" min="2" max="40" value="20"></label>
           <label><span data-i18n="label.turn">Aan zet</span>
             <select id="eng-turn">
               <option value="b" selected data-i18n="option.black">Zwart (b)</option>
@@ -77,7 +80,7 @@
           </label>
         </div>
         <div class="row">
-          <button id="btn-engine-apply" data-i18n="btn.apply" data-i18n-title="help.engine_apply" title="Toepassen">Toepassen</button>
+          <button type="button" id="btn-calculate-move" data-i18n="btn.calculate_move" data-i18n-title="help.calculate_move" title="Forceer zet">Forceer zet</button>
           <span id="engine-last-move" class="last-move"></span>
         </div>
         <div id="engine-thinking" class="engine-thinking hidden" data-i18n="engine.thinking">Stockfish denkt na…</div>
@@ -126,6 +129,7 @@
             <ol id="move-list" class="move-list"></ol>
           </div>
         </div>
+        <div id="board-turn" class="board-turn" data-i18n="board.turn_unknown">Nog geen stelling – aan zet onbekend</div>
         <div class="row board-size-row">
           <label for="board-size"><span data-i18n="label.board_size">Bordgrootte</span>
             <select id="board-size">
@@ -138,6 +142,7 @@
           </label>
           <button type="button" id="btn-scan-board" data-i18n="btn.scan_board" data-i18n-title="help.scan_board" title="Scan bord">Scan bord</button>
           <button type="button" id="btn-check-position" data-i18n="btn.check" data-i18n-title="help.check" title="Controle">Controle</button>
+          <button type="button" id="btn-new-game" data-i18n="btn.new_game" data-i18n-title="help.new_game" title="Nieuw spel">Nieuw spel</button>
         </div>
         <div id="check-status" class="check-status" data-i18n="check.not_done">Controle: nog niet uitgevoerd</div>
         <div id="board-fen" class="fen-line" data-i18n="board.no_position">Nog geen stelling ontvangen</div>
@@ -192,10 +197,13 @@
   </main>
 
   <footer class="site-footer">
-    © 2026 Henk Massink
+    <div>© 2026 Henk Massink</div>
+    <p class="site-footer-disclaimer" data-i18n="footer.disclaimer">
+      Deze software wordt geleverd zoals ze is, zonder garantie. Gemaakt met Cursor.
+    </p>
   </footer>
 
-  <script src="/static/i18n.js"></script>
-  <script src="/static/app.js"></script>
+  <script src="/static/i18n.js?v=__APP_VERSION__"></script>
+  <script src="/static/app.js?v=__APP_VERSION__"></script>
 </body>
 </html>

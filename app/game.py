@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import logging
 from datetime import datetime
 from typing import Optional
 
@@ -11,6 +12,8 @@ import chess.pgn
 import chess.svg
 
 from .i18n import DEFAULT_LANGUAGE, tr
+
+logger = logging.getLogger(__name__)
 
 
 def _placement_only(fen_or_placement: str) -> str:
@@ -26,6 +29,8 @@ class GameState:
         self._turn = "w" if turn == "w" else "b"
         self.board = chess.Board()
         self.moves_san: list[str] = []
+        # Canonieke zetten voor PGN-export via chess.pgn (niet opnieuw SAN-parsen).
+        self.moves: list[chess.Move] = []
         self.last_move: Optional[chess.Move] = None
         self._has_position = False
         self._root_fen: Optional[str] = None
@@ -50,6 +55,7 @@ class GameState:
     def reset(self) -> None:
         self.board = chess.Board()
         self.moves_san = []
+        self.moves = []
         self.last_move = None
         self._has_position = False
         self._root_fen = None
@@ -67,14 +73,15 @@ class GameState:
     def clear_moves(self) -> None:
         """Leeg alleen de zettenlijst (bord blijft tot de volgende FEN)."""
         self.moves_san = []
+        self.moves = []
         self.last_move = None
         self._black_started = False
 
     def sync_from_scan(self, fen_or_placement: str, *, keep_history: bool = False) -> dict:
         """Synchroniseer stelling na scan board.
 
-        Standaard wordt de zettenlijst geleegd; met keep_history=True blijft
-        de historie staan (bijv. verder spelen na een nagespeelde PGN).
+        Met keep_history=True blijft de zettenlijst staan (knop Scan bord).
+        keep_history=False wist historie (o.a. kleurwissel zonder replay).
         """
         try:
             placement = _placement_only(fen_or_placement)
@@ -98,8 +105,16 @@ class GameState:
         self._has_position = True
         return self.render(gap=True)
 
-    def update_from_placement(self, fen_or_placement: str) -> dict:
-        """Verwerk een stukkenplaatsing (of volledige FEN) van de arm."""
+    def update_from_placement(
+        self,
+        fen_or_placement: str,
+        *,
+        adopt_on_gap: bool = True,
+    ) -> dict:
+        """Verwerk een stukkenplaatsing (of volledige FEN) van de arm.
+
+        adopt_on_gap=False: bij geen zetpad de app-stelling behouden (app leidend).
+        """
         try:
             placement = _placement_only(fen_or_placement)
             chess.Board().set_board_fen(placement)
@@ -117,6 +132,9 @@ class GameState:
             return self.render(reset=True)
 
         if self.board.board_fen() == placement:
+            if placement == chess.STARTING_BOARD_FEN and self.board.turn != chess.WHITE:
+                self.board.turn = chess.WHITE
+                self._turn = "w"
             return self.render()
 
         sequence = self._find_move_sequence(placement, max_depth=2)
@@ -125,8 +143,9 @@ class GameState:
                 self._push_detected(move)
             return self.render()
 
-        # Geen pad gevonden: bord bijwerken maar historie BEHOUDEN.
-        self._apply_placement_keep_history(placement)
+        # Geen pad gevonden.
+        if adopt_on_gap:
+            self._apply_placement_keep_history(placement)
         return self.render(gap=True)
 
     def validate_uci_move(self, uci: str) -> dict:
@@ -164,6 +183,48 @@ class GameState:
             "move": uci,
             "san": board.san(move),
         }
+
+    def apply_uci_move(self, uci: str) -> dict:
+        """Valideer en speel een UCI-zet op het app-bord (Stockfish/app leidend)."""
+        validation = self.validate_uci_move(uci)
+        if not validation.get("ok"):
+            return validation
+        try:
+            move = chess.Move.from_uci(uci.strip())
+        except ValueError:
+            return {
+                "ok": False,
+                "move": uci,
+                "reason": tr(self.language, "reason.bad_uci"),
+            }
+        self._push_detected(move)
+        return {
+            "ok": True,
+            "move": uci.strip(),
+            "san": validation["san"],
+            "uci": uci.strip(),
+        }
+
+    def force_move_pieces(self, uci: str) -> tuple[str, str | None]:
+        """Stukletters (s, t) voor force-move vóór het pushen van de zet."""
+        try:
+            move = chess.Move.from_uci(uci.strip())
+        except ValueError:
+            return "P", None
+        piece = self.board.piece_at(move.from_square)
+        s = piece.symbol() if piece else "P"
+        t: str | None = None
+        if self.board.is_en_passant(move):
+            cap_sq = chess.square(
+                chess.square_file(move.to_square),
+                chess.square_rank(move.from_square),
+            )
+            cap = self.board.piece_at(cap_sq)
+            t = cap.symbol() if cap else "p"
+        elif self.board.is_capture(move):
+            cap = self.board.piece_at(move.to_square)
+            t = cap.symbol() if cap else None
+        return s, t
 
     # -- PGN naspelen ---------------------------------------------------------
 
@@ -211,6 +272,7 @@ class GameState:
         # Bord en zettenlijst terug naar de beginstand.
         self.board = chess.Board()
         self.moves_san = []
+        self.moves = []
         self.last_move = None
         self._has_position = True
         self._root_fen = chess.STARTING_FEN
@@ -257,15 +319,29 @@ class GameState:
         }
 
     def _push_detected(self, move: chess.Move) -> None:
-        if move not in self.board.legal_moves:
-            self.board.turn = not self.board.turn
         if self.board.castling_rights == 0:
             self.board.castling_rights = self._infer_castling_rights(self.board)
+        if move not in self.board.legal_moves:
+            # Alleen omdraaien als de zet dan legaal is (scan/turn-mismatch).
+            self.board.turn = not self.board.turn
+            if move not in self.board.legal_moves:
+                self.board.turn = not self.board.turn
+                logger.warning(
+                    "Zet %s genegeerd (illegaal in %s)",
+                    move.uci(),
+                    self.board.fen(),
+                )
+                return
         mover = self.board.turn
-        if not self.moves_san and mover == chess.BLACK:
+        if not self.moves and mover == chess.BLACK:
             self._black_started = True
+            # Root zo zetten dat chess.pgn met zwart kan beginnen.
+            root = chess.Board(self._root_fen or chess.STARTING_FEN)
+            root.turn = chess.BLACK
+            self._root_fen = root.fen()
         san = self.board.san(move)
         self.board.push(move)
+        self.moves.append(move)
         self.moves_san.append(san)
         self.last_move = move
         self._turn = "w" if self.board.turn == chess.WHITE else "b"
@@ -274,7 +350,12 @@ class GameState:
         """Zet stukken; behoud zo veel mogelijk rokaderechten."""
         board = chess.Board()
         board.set_board_fen(placement)
-        board.turn = chess.WHITE if self._turn == "w" else chess.BLACK
+        # Beginstelling: wit is altijd aan zet (niet de robotkleur).
+        if placement == chess.STARTING_BOARD_FEN:
+            board.turn = chess.WHITE
+            self._turn = "w"
+        else:
+            board.turn = chess.WHITE if self._turn == "w" else chess.BLACK
         board.castling_rights = self._infer_castling_rights(board)
         board.ep_square = None
         board.halfmove_clock = 0
@@ -285,6 +366,7 @@ class GameState:
         self._root_fen = board.fen()
         if clear_history:
             self.moves_san = []
+            self.moves = []
             self._black_started = False
 
     def _apply_placement_keep_history(self, placement: str) -> None:
@@ -394,51 +476,41 @@ class GameState:
         return rows
 
     def export_pgn(self, *, white_name: str = "White", black_name: str = "Black") -> str:
-        """Maak een eenvoudige PGN-export van de huidige zettenlijst."""
-        headers = [
-            '[Event "CYNUS Session"]',
-            '[Site "Local"]',
-            f'[Date "{datetime.now().strftime("%Y.%m.%d")}"]',
-            '[Round "-"]',
-            f'[White "{white_name}"]',
-            f'[Black "{black_name}"]',
-            '[Result "*"]',
-        ]
-        if self._root_fen and self._root_fen != chess.STARTING_FEN:
-            headers.append(f'[FEN "{self._root_fen}"]')
-            headers.append('[SetUp "1"]')
+        """Exporteer de partij via ``chess.pgn`` (legale zetten vanaf root-FEN)."""
+        try:
+            root = chess.Board(self._root_fen) if self._root_fen else chess.Board()
+        except ValueError:
+            root = chess.Board()
 
-        movetext_parts: list[str] = []
-        move_no = 1
-        white_to_move = not self._black_started
-        for san in self.moves_san:
-            if white_to_move:
-                movetext_parts.append(f"{move_no}.{san}")
-                white_to_move = False
-            else:
-                if movetext_parts:
-                    movetext_parts[-1] = f"{movetext_parts[-1]} {san}"
-                else:
-                    movetext_parts.append(f"{move_no}...{san}")
-                move_no += 1
-                white_to_move = True
-        movetext_parts.append("*")
+        game = chess.pgn.Game()
+        game.setup(root)
+        game.headers["Event"] = "CYNUS Session"
+        game.headers["Site"] = "Local"
+        game.headers["Date"] = datetime.now().strftime("%Y.%m.%d")
+        game.headers["Round"] = "-"
+        game.headers["White"] = white_name
+        game.headers["Black"] = black_name
+        game.headers["Result"] = "*"
 
-        # Regels maximaal ~80 tekens houden (PGN-conventie).
-        lines: list[str] = []
-        current = ""
-        for part in movetext_parts:
-            if not current:
-                current = part
-            elif len(current) + 1 + len(part) <= 79:
-                current = f"{current} {part}"
-            else:
-                lines.append(current)
-                current = part
-        if current:
-            lines.append(current)
-        movetext = "\n".join(lines)
-        return "\n".join(headers) + "\n\n" + movetext + "\n"
+        node: chess.pgn.GameNode = game
+        board = root.copy(stack=False)
+        for move in self.moves:
+            if move not in board.legal_moves:
+                logger.warning(
+                    "PGN-export gestopt: illegale zet %s in %s",
+                    move.uci(),
+                    board.fen(),
+                )
+                break
+            node = node.add_main_variation(move)
+            board.push(move)
+
+        exporter = chess.pgn.StringExporter(
+            headers=True,
+            variations=False,
+            comments=False,
+        )
+        return game.accept(exporter).strip() + "\n"
 
     def render(
         self,
@@ -463,6 +535,8 @@ class GameState:
             "move_rows": self.move_rows(),
             "fen": self.board.fen() if self._has_position else None,
             "placement": self.board.board_fen() if self._has_position else None,
+            # Altijd uit het bord; beginstelling (ook vóór eerste scan) = wit.
+            "turn": "w" if self.board.turn == chess.WHITE else "b",
             "last_move": last.uci() if last else None,
             "reset": reset,
             "gap": gap,

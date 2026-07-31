@@ -1,36 +1,38 @@
 "use strict";
 
 // ---------------------------------------------------------------------------
-// Protocolcommando's (Cynus BLE protocol v3.5 / documentation/Protocol.txt).
+// Protocolcommando's (Cynus BLE protocol v3.7 / documentation/Protocol.txt).
 // {param} in het template wordt vervangen door de inhoud van het parameterveld.
 // Labels en placeholders komen uit i18n.js (sleutels cmd.<id> en cmd.<id>.ph).
 // ---------------------------------------------------------------------------
 const COMMANDS = [
-  // 2.1 playing related
-  { id: "set-internal-engine", template: "set internal engine {param}", param: { required: true } },
-  { id: "set-flip-board", template: "set flip board {param}", param: { required: true } },
-  { id: "set-time", template: "set time {param}", param: { required: true } },
-  { id: "get-fen", template: "get fen", param: null },
-  { id: "move", template: "move {param}", param: { required: true } },
-  { id: "set-robot-turn", template: "set robot turn", param: null },
-  { id: "scan-board", template: "scan board", param: null },
-  { id: "set-wait-minutes", template: "set wait minutes {param}", param: { required: true } },
-  { id: "get-wait-minutes", template: "get wait minutes", param: null },
-  { id: "get-robot-status", template: "get robot status", param: null },
-  { id: "play-audio", template: "play audio {param}", param: { required: true } },
-  { id: "play-txt", template: "play txt {param}", param: { required: true } },
-  { id: "sync-time", template: "sync time {param}", param: { required: true } },
-  { id: "new-game", template: "new game", param: null },
-  // 2.2 other / force / info
-  { id: "force-reset", template: "force reset", param: null },
+  { id: "display-txt", template: "display txt {param}", param: { required: true } },
   { id: "force-fold", template: "force fold", param: null },
   { id: "force-grab", template: "force grab", param: null },
   { id: "force-release", template: "force release", param: null },
-  { id: "get-serial-number", template: "get serial number", param: null },
+  { id: "force-reset", template: "force reset", param: null },
   { id: "get-battery", template: "get battery", param: null },
-  { id: "get-software-version", template: "get software version", param: null },
+  { id: "get-fen", template: "get fen", param: null },
   { id: "get-hardware-version", template: "get hardware version", param: null },
+  { id: "get-robot-status", template: "get robot status", param: null },
+  { id: "get-serial-number", template: "get serial number", param: null },
+  { id: "get-software-version", template: "get software version", param: null },
+  { id: "get-wait-minutes", template: "get wait minutes", param: null },
+  { id: "move", template: "move {param}", param: { required: true } },
   { id: "move-force", template: "move {param}", param: { required: true } },
+  { id: "new-game", template: "new game", param: null },
+  { id: "play-audio", template: "play audio {param}", param: { required: true } },
+  { id: "scan-board", template: "scan board", param: null },
+  { id: "set-flip-board", template: "set flip board {param}", param: { required: true } },
+  { id: "set-internal-engine", template: "set internal engine {param}", param: { required: true } },
+  { id: "set-robot-turn", template: "set robot turn", param: null },
+  { id: "set-time", template: "set time {param}", param: { required: true } },
+  { id: "set-timer-mode", template: "set timer mode {param}", param: { required: true } },
+  { id: "set-volume", template: "set volume {param}", param: { required: true } },
+  { id: "set-wait-minutes", template: "set wait minutes {param}", param: { required: true } },
+  { id: "sync-time", template: "sync time {param}", param: { required: true } },
+  { id: "toon-text", template: "toon_text {param}", param: { required: true } },
+  // Altijd onderaan
   { id: "raw", template: "{param}", param: { required: true } },
 ];
 
@@ -183,6 +185,19 @@ function onBoard(msg) {
     boardEl.innerHTML = msg.svg;
     applyBoardSize($("board-size").value);
   }
+  const turnEl = $("board-turn");
+  if (turnEl) {
+    turnEl.classList.remove("white", "black");
+    if (msg.turn === "w") {
+      turnEl.textContent = t("board.turn_white");
+      turnEl.classList.add("white");
+    } else if (msg.turn === "b") {
+      turnEl.textContent = t("board.turn_black");
+      turnEl.classList.add("black");
+    } else {
+      turnEl.textContent = t("board.turn_unknown");
+    }
+  }
   $("board-fen").textContent = msg.fen || t("board.no_position");
   renderMoveList(msg.move_rows || null, msg.moves || []);
   if (msg.error) {
@@ -259,9 +274,13 @@ function onEngineThinking(active) {
 
 function onEngineMove(msg) {
   const move = typeof msg === "string" ? msg : msg.move;
-  lastState.engineMove = move;
+  lastState.engineMove = move || null;
   onEngineThinking(false);
-  $("engine-last-move").textContent = t("engine.last_move", { move });
+  if (move) {
+    $("engine-last-move").textContent = t("engine.last_move", { move });
+  } else {
+    $("engine-last-move").textContent = "";
+  }
   if (msg && msg.candidates) {
     renderCandidates(msg.candidates);
   }
@@ -326,6 +345,15 @@ function onSide(msg) {
   }
   const hint = $("side-hint");
   hint.textContent = msg.human === "b" ? t("side.hint_black") : t("side.hint_white");
+  const flipWarn = $("side-flip-warning");
+  if (flipWarn) {
+    if (msg.human === "b") {
+      flipWarn.textContent = t("side.flip_warning");
+      flipWarn.classList.remove("hidden");
+    } else {
+      flipWarn.classList.add("hidden");
+    }
+  }
 }
 
 function onCheckResult(msg) {
@@ -523,7 +551,25 @@ function buildCommandString() {
   const cmd = selectedCommand();
   const param = $("cmd-param").value.trim();
   if (cmd.param && cmd.param.required && !param) return null;
+  if (cmd.id === "toon-text") {
+    const parsed = parseToonTextParam(param);
+    if (!parsed) return null;
+    return `toon_text ${parsed.text} (${parsed.duration}s)`;
+  }
   return cmd.template.replace("{param}", param);
+}
+
+/** Parse "tekst" of "tekst,5" → { text, duration }; duration default 10. */
+function parseToonTextParam(param) {
+  const raw = (param || "").trim();
+  if (!raw) return null;
+  const m = raw.match(/^(.*),(\d+(?:\.\d+)?)\s*$/);
+  if (m) {
+    const text = m[1].trim();
+    if (!text) return null;
+    return { text, duration: Number(m[2]) };
+  }
+  return { text: raw, duration: 10 };
 }
 
 function updateCmdUi() {
@@ -560,6 +606,21 @@ function initTestPanel() {
   select.addEventListener("change", updateCmdUi);
   $("cmd-param").addEventListener("input", updateCmdUi);
   $("btn-cmd-send").addEventListener("click", () => {
+    const cmd = selectedCommand();
+    const param = $("cmd-param").value.trim();
+    if (cmd.param && cmd.param.required && !param) {
+      addLog("info", t("test.fill_param"));
+      return;
+    }
+    if (cmd.id === "toon-text") {
+      const parsed = parseToonTextParam(param);
+      if (!parsed) {
+        addLog("info", t("test.fill_param"));
+        return;
+      }
+      send({ type: "toon_text", text: parsed.text, duration: parsed.duration });
+      return;
+    }
     const command = buildCommandString();
     if (!command) {
       addLog("info", t("test.fill_param"));
@@ -627,6 +688,14 @@ function init() {
     el.textContent = t("check.busy");
     send({ type: "check_position" });
   });
+  $("btn-new-game").addEventListener("click", () => {
+    if (!window.confirm(t("new_game.confirm"))) return;
+    const check = $("check-status");
+    check.classList.remove("ok", "bad");
+    check.textContent = t("check.not_done");
+    clearMoveValidation();
+    send({ type: "new_game" });
+  });
   $("btn-download-pgn").addEventListener("click", () => {
     window.location.href = "/download/pgn";
   });
@@ -685,19 +754,46 @@ function init() {
     send({ type: "toggle_auto", enabled: e.target.checked });
   });
 
-  $("btn-engine-apply").addEventListener("click", () => {
+  function clampInt(value, min, max) {
+    const n = parseInt(value, 10);
+    if (Number.isNaN(n)) return null;
+    return Math.max(min, Math.min(max, n));
+  }
+
+  function applyEngineSettings() {
+    const elo = clampInt($("eng-elo").value, 1000, 4000);
+    const threads = clampInt($("eng-threads").value, 2, 40);
+    if (elo === null || threads === null) return;
+    $("eng-elo").value = String(elo);
+    $("eng-threads").value = String(threads);
     send({
       type: "set_engine",
       settings: {
-        elo: $("eng-elo").value,
+        elo,
         analysis_depth: $("eng-analysis-depth").value,
         movetime: $("eng-movetime").value,
         hash: $("eng-hash").value,
-        threads: $("eng-threads").value,
+        threads,
         turn: $("eng-turn").value,
         candidates: $("eng-candidates").value,
       },
     });
+  }
+
+  for (const id of [
+    "eng-elo",
+    "eng-analysis-depth",
+    "eng-movetime",
+    "eng-hash",
+    "eng-threads",
+    "eng-turn",
+    "eng-candidates",
+  ]) {
+    $(id).addEventListener("change", applyEngineSettings);
+  }
+
+  $("btn-calculate-move").addEventListener("click", () => {
+    send({ type: "calculate_move" });
   });
 
   $("btn-console-clear").addEventListener("click", () => {
