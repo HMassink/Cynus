@@ -43,8 +43,8 @@
         <h2 data-i18n="panel.side">Jouw kleur</h2>
         <p class="hint" data-i18n="side.hint_setup">Stelt flip board in op de arm en de Stockfish-kleur voor de robot.</p>
         <div class="row side-buttons">
-          <button type="button" id="btn-side-white" class="side-btn" data-i18n="btn.side_white" data-i18n-title="help.side_white" title="Ik speel wit">Ik speel wit</button>
-          <button type="button" id="btn-side-black" class="side-btn" data-i18n="btn.side_black" data-i18n-title="help.side_black" title="Ik speel zwart">Ik speel zwart</button>
+          <button type="button" id="btn-side-white" class="side-btn" data-i18n="btn.side_white" data-i18n-title="help.side_white" title="Ik speel wit" disabled>Ik speel wit</button>
+          <button type="button" id="btn-side-black" class="side-btn" data-i18n="btn.side_black" data-i18n-title="help.side_black" title="Ik speel zwart" disabled>Ik speel zwart</button>
         </div>
         <div id="side-status" class="side-status" data-i18n="side.status_default">Huidig: jij wit, robot zwart (standaard)</div>
         <div id="side-flip-warning" class="side-flip-warning warning hidden" role="alert" data-i18n="side.flip_warning">
@@ -52,7 +52,7 @@
         </div>
         <p id="side-hint" class="hint" data-i18n="side.hint_white">Speel je zet op het bord en druk daarna op de klok.</p>
         <div class="row">
-          <button type="button" id="btn-robot-move" data-i18n="btn.robot_move" data-i18n-title="help.robot_move" title="Laat robot zetten">Laat robot zetten</button>
+          <button type="button" id="btn-robot-move" data-i18n="btn.robot_move" data-i18n-title="help.robot_move" title="Laat robot zetten" disabled>Laat robot zetten</button>
         </div>
       </section>
 
@@ -63,6 +63,28 @@
           <input type="checkbox" id="auto-mode" checked>
           <span data-i18n="engine.auto">Automodus: antwoord automatisch op "get move"</span>
         </label>
+        <label class="toggle-row">
+          <input type="checkbox" id="pgn-mode">
+          <span data-i18n="engine.pgn_mode" data-i18n-title="help.pgn_mode" title="Speel eerst vanuit PGN-database">Speel vanuit PGN-database (anders Stockfish)</span>
+        </label>
+        <div class="pgn-database-block">
+          <label class="toggle-row">
+            <input type="checkbox" id="pgn-variations">
+            <span data-i18n="engine.pgn_variations" data-i18n-title="help.pgn_variations" title="Neem ook PGN-varianten mee">Ook varianten meenemen</span>
+          </label>
+          <label class="pgn-database-select-row" for="pgn-database-select">
+            <span data-i18n="label.pgn_database">PGN-database</span>
+            <select id="pgn-database-select">
+              <option value="" data-i18n="option.pgn_none">— geen —</option>
+            </select>
+          </label>
+          <div class="row pgn-database-actions">
+            <input type="file" id="pgn-database-file" accept=".pgn,.PGN">
+            <button type="button" id="btn-pgn-database-upload" data-i18n="btn.pgn_upload" data-i18n-title="hint.pgn_database" title="Upload .pgn-bestanden met gespeelde partijen. Bij een bekende stelling speelt de robot een historische zet.">Uploaden</button>
+            <button type="button" id="btn-pgn-database-search" data-i18n="btn.pgn_search" data-i18n-title="help.pgn_search" title="Zoek historische zetten voor de huidige stelling op het bord">Zoek</button>
+            <button type="button" id="btn-pgn-database-delete" data-i18n="btn.pgn_delete">Verwijderen</button>
+          </div>
+        </div>
         <div class="settings-grid">
           <label><span data-i18n="label.elo">ELO</span> <input type="number" id="eng-elo" min="1000" max="4000" value="2000"></label>
           <label><span data-i18n="label.analysis_depth">Analyse-diepte</span> <input type="number" id="eng-analysis-depth" min="1" max="30" value="15"></label>
@@ -75,23 +97,14 @@
               <option value="w" data-i18n="option.white">Wit (w)</option>
             </select>
           </label>
-          <label><span data-i18n="label.candidates">Kandidaten</span>
-            <input type="number" id="eng-candidates" min="1" max="10" value="5">
+          <label class="candidates-with-force">
+            <span data-i18n="label.candidates">Kandidaten</span>
+            <span class="candidates-force-row">
+              <input type="number" id="eng-candidates" min="1" max="10" value="5">
+              <button type="button" id="btn-calculate-move" data-i18n="btn.calculate_move" data-i18n-title="help.calculate_move" title="Forceer zet">Forceer zet</button>
+            </span>
           </label>
         </div>
-        <div class="row">
-          <button type="button" id="btn-calculate-move" data-i18n="btn.calculate_move" data-i18n-title="help.calculate_move" title="Forceer zet">Forceer zet</button>
-          <span id="engine-last-move" class="last-move"></span>
-        </div>
-        <div id="engine-thinking" class="engine-thinking hidden" data-i18n="engine.thinking">Stockfish denkt na…</div>
-        <table id="engine-candidates" class="engine-candidates">
-          <thead>
-            <tr><th>#</th><th data-i18n="th.move">Zet</th><th data-i18n="th.score">Score</th><th data-i18n="th.line">Lijn</th></tr>
-          </thead>
-          <tbody>
-            <tr class="empty"><td colspan="4" data-i18n="candidates.empty">Nog geen analyse</td></tr>
-          </tbody>
-        </table>
       </section>
 
       <section class="panel" id="panel-test">
@@ -101,7 +114,7 @@
         </div>
         <div class="row">
           <input type="text" id="cmd-param" placeholder="">
-          <button id="btn-cmd-send" data-i18n="btn.send">Verstuur</button>
+          <button id="btn-cmd-send" data-i18n="btn.send" disabled>Verstuur</button>
         </div>
         <div class="cmd-preview"><span data-i18n="test.preview">Te versturen:</span> <code id="cmd-preview">–</code></div>
         <details class="protocol-help">
@@ -140,24 +153,12 @@
               <option value="1000" data-i18n="size.xxlarge">1000px</option>
             </select>
           </label>
-          <button type="button" id="btn-scan-board" data-i18n="btn.scan_board" data-i18n-title="help.scan_board" title="Scan bord">Scan bord</button>
-          <button type="button" id="btn-check-position" data-i18n="btn.check" data-i18n-title="help.check" title="Controle">Controle</button>
-          <button type="button" id="btn-new-game" data-i18n="btn.new_game" data-i18n-title="help.new_game" title="Nieuw spel">Nieuw spel</button>
+          <button type="button" id="btn-scan-board" data-i18n="btn.scan_board" data-i18n-title="help.scan_board" title="Scan bord" disabled>Scan bord</button>
+          <button type="button" id="btn-check-position" data-i18n="btn.check" data-i18n-title="help.check" title="Controle" disabled>Controle</button>
+          <button type="button" id="btn-new-game" data-i18n="btn.new_game" data-i18n-title="help.new_game" title="Nieuw spel" disabled>Nieuw spel</button>
         </div>
         <div id="check-status" class="check-status" data-i18n="check.not_done">Controle: nog niet uitgevoerd</div>
         <div id="board-fen" class="fen-line" data-i18n="board.no_position">Nog geen stelling ontvangen</div>
-      </section>
-
-      <section class="panel" id="panel-move">
-        <h2 data-i18n="panel.move">Handmatige zet</h2>
-        <div class="row">
-          <input type="text" id="move-input" data-i18n-placeholder="move.placeholder" placeholder="bijv. e2e4" maxlength="5">
-          <button id="btn-move-send" data-i18n="btn.move_send">Voer zet uit</button>
-        </div>
-        <div id="move-validation" class="move-validation hidden"></div>
-        <div class="row">
-          <button id="btn-force-move" class="hidden" data-i18n="btn.force">Toch uitvoeren</button>
-        </div>
       </section>
 
       <section class="panel" id="panel-replay">
@@ -193,6 +194,35 @@
         <div id="console" class="console"></div>
         <button id="btn-console-clear" class="small" data-i18n="btn.console_clear">Wis console</button>
       </section>
+
+      <section class="panel hidden" id="panel-candidates">
+        <h2 data-i18n="panel.candidates">Kandidaten</h2>
+        <div class="row">
+          <span id="engine-last-move" class="last-move"></span>
+          <span id="move-source-badge" class="source-badge hidden" aria-live="polite"></span>
+        </div>
+        <div id="engine-thinking" class="engine-thinking hidden" data-i18n="engine.thinking">Stockfish denkt na…</div>
+        <table id="engine-candidates" class="engine-candidates">
+          <thead>
+            <tr><th>#</th><th data-i18n="th.move">Zet</th><th id="th-score" data-i18n="th.score">Score</th><th data-i18n="th.line">Lijn</th></tr>
+          </thead>
+          <tbody>
+            <tr class="empty"><td colspan="4" data-i18n="candidates.empty">Nog geen analyse</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="panel" id="panel-move">
+        <h2 data-i18n="panel.move">Handmatige zet</h2>
+        <div class="row">
+          <input type="text" id="move-input" data-i18n-placeholder="move.placeholder" placeholder="bijv. e2e4" maxlength="5">
+          <button id="btn-move-send" data-i18n="btn.move_send" disabled>Voer zet uit</button>
+        </div>
+        <div id="move-validation" class="move-validation hidden"></div>
+        <div class="row">
+          <button id="btn-force-move" class="hidden" data-i18n="btn.force">Toch uitvoeren</button>
+        </div>
+      </section>
     </div>
   </main>
 
@@ -202,6 +232,22 @@
       Deze software wordt geleverd zoals ze is, zonder garantie. Gemaakt met Cursor.
     </p>
   </footer>
+
+  <div id="scan-recovery-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="scan-recovery-title">
+    <div class="modal-dialog">
+      <h2 id="scan-recovery-title" data-i18n="recovery.title">Scan komt niet overeen</h2>
+      <p class="modal-body" data-i18n="recovery.body">
+        De robotscan wijkt af van de stelling in de app. De app blijft leidend; er wordt opnieuw gescand tot het klopt.
+      </p>
+      <div class="modal-fens">
+        <div><span class="modal-fen-label" data-i18n="recovery.robot">Robot</span>: <code id="scan-recovery-robot"></code></div>
+        <div><span class="modal-fen-label" data-i18n="recovery.app">App</span>: <code id="scan-recovery-app"></code></div>
+      </div>
+      <div class="modal-actions">
+        <button type="button" id="btn-scan-recovery-stop" data-i18n="recovery.stop">Stop</button>
+      </div>
+    </div>
+  </div>
 
   <script src="/static/i18n.js?v=__APP_VERSION__"></script>
   <script src="/static/app.js?v=__APP_VERSION__"></script>

@@ -34,6 +34,9 @@ stockfish*.exe
 
 # Local / generated
 pgn/*.pgn
+pgn/databases/*.pgn
+pgn/databases_config.json
 !pgn/.gitkeep
+!pgn/databases/.gitkeep
 *.log
 __pycache__/

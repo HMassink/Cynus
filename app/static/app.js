@@ -38,6 +38,12 @@ const COMMANDS = [
 
 const $ = (id) => document.getElementById(id);
 
+const ROBOT_REQUIRED_BUTTONS = [
+  "btn-side-white", "btn-side-black",
+  "btn-cmd-send", "btn-scan-board", "btn-check-position",
+  "btn-new-game", "btn-move-send",
+];
+
 let ws = null;
 let pendingIllegalMove = null;
 
@@ -51,7 +57,9 @@ const lastState = {
   replayAuto: { running: false, interval: 10 },
   check: null,
   engineMove: null,
+  engineMoveSource: null,
   candidates: null,
+  candidatesHighlightBest: true,
 };
 
 // -- WebSocket ---------------------------------------------------------------
@@ -86,12 +94,14 @@ function connectWs() {
       case "engine_move": onEngineMove(msg); break;
       case "engine_thinking": onEngineThinking(true); break;
       case "check_result": onCheckResult(msg); break;
+      case "scan_recovery": onScanRecovery(msg); break;
       case "move_validation": onMoveValidation(msg); break;
       case "move_forced": onMoveForced(msg); break;
       case "replay": onReplay(msg); break;
       case "replay_error": onReplayError(msg); break;
       case "replay_auto": onReplayAuto(msg); break;
       case "auto": $("auto-mode").checked = msg.enabled; break;
+      case "pgn_databases": onPgnDatabases(msg); break;
       case "side": onSide(msg); break;
       case "log": addLog(msg.dir, msg.text); break;
     }
@@ -118,6 +128,28 @@ function setAppVersion(version) {
   if (el) el.textContent = `v${version}`;
 }
 
+function isRobotOpeningMoveNeeded() {
+  /** Alleen nodig als robot wit is én er nog geen zetten gespeeld zijn. */
+  const connected = !!(lastState.status && lastState.status.connected);
+  if (!connected) return false;
+  const side = lastState.side;
+  if (!side || side.robot !== "w") return false;
+  const board = lastState.board;
+  if (!board) return true; // kleur gekozen, nog geen bord: openingszet toestaan
+  const moves = board.moves || [];
+  if (moves.length > 0) return false;
+  const rows = board.move_rows || [];
+  if (rows.some((r) => r.w || r.b)) return false;
+  // Beginstand: wit aan zet (of turn nog onbekend).
+  if (board.turn && board.turn !== "w") return false;
+  return true;
+}
+
+function updateRobotMoveButton() {
+  const btn = $("btn-robot-move");
+  if (btn) btn.disabled = !isRobotOpeningMoveNeeded();
+}
+
 function onStatus(msg) {
   lastState.status = msg;
   setAppVersion(msg.version);
@@ -132,6 +164,11 @@ function onStatus(msg) {
     label.textContent = t("arm.disconnected");
     $("btn-disconnect").disabled = true;
   }
+  for (const id of ROBOT_REQUIRED_BUTTONS) {
+    const btn = $(id);
+    if (btn) btn.disabled = !msg.connected;
+  }
+  updateRobotMoveButton();
 }
 
 async function loadVersion() {
@@ -200,6 +237,7 @@ function onBoard(msg) {
   }
   $("board-fen").textContent = msg.fen || t("board.no_position");
   renderMoveList(msg.move_rows || null, msg.moves || []);
+  updateRobotMoveButton();
   if (msg.error) {
     addLog("info", msg.error);
   }
@@ -272,17 +310,85 @@ function onEngineThinking(active) {
   $("engine-thinking").classList.toggle("hidden", !active);
 }
 
+function parseCandidateCount(score) {
+  if (score == null) return 0;
+  const m = String(score).match(/^(\d+)\s*x$/i);
+  return m ? parseInt(m[1], 10) : 0;
+}
+
+function updateMoveSourceBadge(source, visible) {
+  const badge = $("move-source-badge");
+  if (!badge) return;
+  badge.classList.remove("database", "stockfish", "hint");
+  if (!visible || !source) {
+    badge.classList.add("hidden");
+    badge.textContent = "";
+    return;
+  }
+  if (source === "database_hint") {
+    badge.textContent = t("source.database_hint");
+    badge.classList.add("hint");
+    badge.classList.remove("hidden");
+  } else if (source === "database") {
+    badge.textContent = t("source.database");
+    badge.classList.add("database");
+    badge.classList.remove("hidden");
+  } else if (source === "stockfish") {
+    badge.textContent = t("source.stockfish");
+    badge.classList.add("stockfish");
+    badge.classList.remove("hidden");
+  } else {
+    badge.classList.add("hidden");
+    badge.textContent = "";
+  }
+}
+
+function updateScoreColumnHeader(source) {
+  const th = $("th-score");
+  if (!th) return;
+  if (source === "database") {
+    th.textContent = t("th.count");
+    th.setAttribute("data-i18n", "th.count");
+  } else {
+    th.textContent = t("th.score");
+    th.setAttribute("data-i18n", "th.score");
+  }
+}
+
 function onEngineMove(msg) {
   const move = typeof msg === "string" ? msg : msg.move;
-  lastState.engineMove = move || null;
+  const source = typeof msg === "object" && msg ? msg.source : null;
+  const suggestion = !!(msg && msg.suggestion);
+  const candidates = msg && msg.candidates ? msg.candidates : null;
+  const uiSource = suggestion && source === "database" ? "database_hint" : source;
+
   onEngineThinking(false);
+  if (suggestion) {
+    // Suggesties voor de speler: kandidatentabel vullen, geen gekozen robotzet.
+    lastState.engineMoveSource = uiSource;
+    lastState.candidatesHighlightBest = false;
+    $("engine-last-move").textContent = candidates && candidates.length
+      ? t("engine.pgn_suggestions")
+      : t("engine.pgn_suggestions_none");
+    updateMoveSourceBadge(uiSource, true);
+    updateScoreColumnHeader("database");
+    if (candidates) renderCandidates(candidates);
+    return;
+  }
+
+  lastState.engineMove = move || null;
+  lastState.engineMoveSource = source || null;
+  lastState.candidatesHighlightBest = true;
   if (move) {
-    $("engine-last-move").textContent = t("engine.last_move", { move });
+    const key = source === "database" ? "engine.last_move_db" : "engine.last_move";
+    $("engine-last-move").textContent = t(key, { move });
   } else {
     $("engine-last-move").textContent = "";
   }
-  if (msg && msg.candidates) {
-    renderCandidates(msg.candidates);
+  updateMoveSourceBadge(source, !!move);
+  updateScoreColumnHeader(source === "database" ? "database" : "stockfish");
+  if (candidates) {
+    renderCandidates(candidates);
   }
 }
 
@@ -300,9 +406,12 @@ function renderCandidates(candidates) {
     tbody.appendChild(tr);
     return;
   }
+  const fromDb = lastState.engineMoveSource === "database"
+    || lastState.engineMoveSource === "database_hint";
+  const highlightBest = lastState.candidatesHighlightBest !== false;
   candidates.forEach((c, index) => {
     const tr = document.createElement("tr");
-    if (index === 0) tr.className = "best";
+    if (highlightBest && index === 0) tr.className = "best";
 
     const rank = document.createElement("td");
     rank.textContent = String(c.multipv || index + 1);
@@ -314,11 +423,16 @@ function renderCandidates(candidates) {
 
     const score = document.createElement("td");
     score.className = "score";
-    score.textContent = c.score || "–";
-    if (c.mate != null) {
-      score.classList.add(Number(c.mate) > 0 ? "good" : "bad");
-    } else if (c.centipawn != null) {
-      score.classList.add(Number(c.centipawn) >= 0 ? "good" : "bad");
+    if (fromDb) {
+      const count = parseCandidateCount(c.score);
+      score.textContent = count ? t("pgn.choice_count", { count }) : (c.score || "–");
+    } else {
+      score.textContent = c.score || "–";
+      if (c.mate != null) {
+        score.classList.add(Number(c.mate) > 0 ? "good" : "bad");
+      } else if (c.centipawn != null) {
+        score.classList.add(Number(c.centipawn) >= 0 ? "good" : "bad");
+      }
     }
 
     const pv = document.createElement("td");
@@ -354,6 +468,7 @@ function onSide(msg) {
       flipWarn.classList.add("hidden");
     }
   }
+  updateRobotMoveButton();
 }
 
 function onCheckResult(msg) {
@@ -366,6 +481,19 @@ function onCheckResult(msg) {
   } else {
     el.classList.add("bad");
     el.textContent = t("check.bad", { robot: msg.robot_fen, app: msg.expected_fen });
+  }
+}
+
+function onScanRecovery(msg) {
+  lastState.scanRecovery = msg;
+  const modal = $("scan-recovery-modal");
+  if (!modal) return;
+  if (msg.active) {
+    $("scan-recovery-robot").textContent = msg.robot_fen || "";
+    $("scan-recovery-app").textContent = msg.expected_fen || "";
+    modal.classList.remove("hidden");
+  } else {
+    modal.classList.add("hidden");
   }
 }
 
@@ -437,8 +565,11 @@ function onReplay(msg) {
   if (msg.active && msg.index === 0) {
     renderCandidates([]);
     lastState.engineMove = null;
+    lastState.engineMoveSource = null;
     lastState.check = null;
     $("engine-last-move").textContent = "";
+    updateMoveSourceBadge(null, false);
+    updateScoreColumnHeader("stockfish");
     onEngineThinking(false);
     const check = $("check-status");
     check.classList.remove("ok", "bad");
@@ -520,6 +651,79 @@ function loadPgnFile() {
   send({ type: "load_pgn", pgn: text });
 }
 
+function updateCandidatesPanelVisibility(pgnEnabled) {
+  const panel = $("panel-candidates");
+  if (panel) panel.classList.toggle("hidden", !pgnEnabled);
+}
+
+function onPgnDatabases(msg) {
+  const toggle = $("pgn-mode");
+  if (toggle) toggle.checked = !!msg.enabled;
+  const variations = $("pgn-variations");
+  if (variations) variations.checked = !!msg.include_variations;
+  updateCandidatesPanelVisibility(!!msg.enabled);
+
+  const select = $("pgn-database-select");
+  if (!select) return;
+
+  const databases = Array.isArray(msg.databases) ? msg.databases : [];
+  const active = msg.active || "";
+  const prev = select.value;
+
+  select.innerHTML = "";
+  const none = document.createElement("option");
+  none.value = "";
+  none.textContent = t("option.pgn_none");
+  none.setAttribute("data-i18n", "option.pgn_none");
+  select.appendChild(none);
+
+  for (const name of databases) {
+    const opt = document.createElement("option");
+    opt.value = name;
+    opt.textContent = name;
+    select.appendChild(opt);
+  }
+
+  if (active && databases.includes(active)) {
+    select.value = active;
+  } else if (prev && databases.includes(prev)) {
+    select.value = prev;
+  } else {
+    select.value = "";
+  }
+}
+
+function uploadPgnDatabase() {
+  const input = $("pgn-database-file");
+  const file = input.files && input.files[0];
+  if (!file) {
+    addLog("info", t("pgn.db_choose"));
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = () => {
+    send({
+      type: "upload_pgn_database",
+      name: file.name,
+      pgn: String(reader.result || ""),
+    });
+    input.value = "";
+  };
+  reader.onerror = () => addLog("info", t("pgn.read_error"));
+  reader.readAsText(file);
+}
+
+function deletePgnDatabase() {
+  const select = $("pgn-database-select");
+  const name = select && select.value;
+  if (!name) {
+    addLog("info", t("pgn.db_delete_none"));
+    return;
+  }
+  if (!confirm(t("pgn.db_delete_confirm", { name }))) return;
+  send({ type: "delete_pgn_database", name });
+}
+
 // -- Console ---------------------------------------------------------------------
 
 const MAX_CONSOLE_LINES = 500;
@@ -554,12 +758,15 @@ function buildCommandString() {
   if (cmd.id === "toon-text") {
     const parsed = parseToonTextParam(param);
     if (!parsed) return null;
+    if (parsed.duration <= 0) {
+      return `toon_text ${parsed.text} (${t("test.toon_stays")})`;
+    }
     return `toon_text ${parsed.text} (${parsed.duration}s)`;
   }
   return cmd.template.replace("{param}", param);
 }
 
-/** Parse "tekst" of "tekst,5" → { text, duration }; duration default 10. */
+/** Parse "tekst", "tekst,5" of "tekst,0" → { text, duration }; default 10; 0 = blijvend. */
 function parseToonTextParam(param) {
   const raw = (param || "").trim();
   if (!raw) return null;
@@ -647,11 +854,24 @@ function onLanguageChanged() {
   if (lastState.side) onSide(lastState.side);
   if (lastState.replay) onReplay(lastState.replay);
   if (lastState.check) onCheckResult(lastState.check);
-  if (lastState.engineMove) {
-    $("engine-last-move").textContent = t("engine.last_move", { move: lastState.engineMove });
+  if (lastState.engineMoveSource === "database_hint") {
+    $("engine-last-move").textContent = lastState.candidates && lastState.candidates.length
+      ? t("engine.pgn_suggestions")
+      : t("engine.pgn_suggestions_none");
+    updateMoveSourceBadge("database_hint", true);
+    updateScoreColumnHeader("database");
+  } else if (lastState.engineMove) {
+    const key = lastState.engineMoveSource === "database"
+      ? "engine.last_move_db"
+      : "engine.last_move";
+    $("engine-last-move").textContent = t(key, { move: lastState.engineMove });
+    updateMoveSourceBadge(lastState.engineMoveSource, true);
+    updateScoreColumnHeader(
+      lastState.engineMoveSource === "database" ? "database" : "stockfish"
+    );
   }
-  if (lastState.candidates && lastState.candidates.length === 0) {
-    renderCandidates([]);
+  if (lastState.candidates) {
+    renderCandidates(lastState.candidates);
   }
 
   send({ type: "set_language", language: getLanguage() });
@@ -687,6 +907,9 @@ function init() {
     el.classList.remove("ok", "bad");
     el.textContent = t("check.busy");
     send({ type: "check_position" });
+  });
+  $("btn-scan-recovery-stop").addEventListener("click", () => {
+    send({ type: "cancel_scan_recovery" });
   });
   $("btn-new-game").addEventListener("click", () => {
     if (!window.confirm(t("new_game.confirm"))) return;
@@ -753,6 +976,25 @@ function init() {
   $("auto-mode").addEventListener("change", (e) => {
     send({ type: "toggle_auto", enabled: e.target.checked });
   });
+
+  $("pgn-mode").addEventListener("change", (e) => {
+    updateCandidatesPanelVisibility(e.target.checked);
+    send({ type: "toggle_pgn_mode", enabled: e.target.checked });
+  });
+  const pgnMode = $("pgn-mode");
+  updateCandidatesPanelVisibility(!!(pgnMode && pgnMode.checked));
+  $("pgn-variations").addEventListener("change", (e) => {
+    send({ type: "toggle_pgn_variations", enabled: e.target.checked });
+  });
+  $("pgn-database-select").addEventListener("change", (e) => {
+    send({ type: "set_pgn_database", name: e.target.value || "" });
+  });
+  $("btn-pgn-database-upload").addEventListener("click", uploadPgnDatabase);
+  $("btn-pgn-database-search").addEventListener("click", () => {
+    updateCandidatesPanelVisibility(true);
+    send({ type: "search_pgn_database" });
+  });
+  $("btn-pgn-database-delete").addEventListener("click", deletePgnDatabase);
 
   function clampInt(value, min, max) {
     const n = parseInt(value, 10);

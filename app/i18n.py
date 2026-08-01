@@ -32,6 +32,10 @@ MESSAGES: dict[str, dict[str, str]] = {
         "nl": "Verbonden met {name} ({address})",
         "en": "Connected to {name} ({address})",
     },
+    "connect_engine_off": {
+        "nl": "Interne engine uitgeschakeld na verbinden (zetten via de app)",
+        "en": "Internal engine disabled after connect (moves via the app)",
+    },
     "connect_failed": {
         "nl": "Verbinden mislukt: {error}",
         "en": "Connecting failed: {error}",
@@ -107,6 +111,14 @@ MESSAGES: dict[str, dict[str, str]] = {
         "nl": "Nieuw spel alleen in de app (geen verbinding met de arm)",
         "en": "New game in the app only (no connection to the arm)",
     },
+    "new_game_engine_off": {
+        "nl": "Interne engine uitgeschakeld na nieuw spel (zetten via de app)",
+        "en": "Internal engine disabled after new game (moves via the app)",
+    },
+    "scan_after_new_game": {
+        "nl": "scan board verstuurd na nieuw spel – wacht op FEN",
+        "en": "scan board sent after new game – waiting for FEN",
+    },
     "pgn_archived": {
         "nl": "Partij opgeslagen als {file} (map pgn/)",
         "en": "Game saved as {file} (pgn/ folder)",
@@ -142,6 +154,34 @@ MESSAGES: dict[str, dict[str, str]] = {
     "board_gap": {
         "nl": "Scan wijkt af van de app/Stockfish-stelling; app blijft leidend (bord niet overgenomen)",
         "en": "Scan differs from the app/Stockfish position; app stays authoritative (board not adopted)",
+    },
+    "scan_recovery_started": {
+        "nl": "Scan-fout: herscan-loop gestart (app-stelling blijft leidend)",
+        "en": "Scan mismatch: rescan loop started (app position stays authoritative)",
+    },
+    "scan_recovery_stopped": {
+        "nl": "Scan-recovery gestopt door gebruiker",
+        "en": "Scan recovery stopped by user",
+    },
+    "scan_recovery_ok": {
+        "nl": "Scan-recovery: stelling komt weer overeen",
+        "en": "Scan recovery: position matches again",
+    },
+    "scan_recovery_timeout": {
+        "nl": "Scan-recovery: geen FEN ontvangen – opnieuw proberen",
+        "en": "Scan recovery: no FEN received – retrying",
+    },
+    "get_move_during_recovery": {
+        "nl": "get move genegeerd: scan-recovery is actief",
+        "en": "get move ignored: scan recovery is active",
+    },
+    "fen_ignored_during_recovery": {
+        "nl": "FEN genegeerd: scan-recovery wacht op eigen scan",
+        "en": "FEN ignored: scan recovery awaiting its own scan",
+    },
+    "raw_command_rejected": {
+        "nl": "Commando geweigerd (niet in allowlist): {command}",
+        "en": "Command rejected (not in allowlist): {command}",
     },
     "move_detected": {
         "nl": "Zet gedetecteerd: {move}",
@@ -260,6 +300,10 @@ MESSAGES: dict[str, dict[str, str]] = {
         "nl": "knop Laat robot zetten",
         "en": "Let robot move button",
     },
+    "reason.scan_recovery": {
+        "nl": "scan-recovery geslaagd",
+        "en": "scan recovery succeeded",
+    },
     # -- kleur / modus ----------------------------------------------------------
     "invalid_color": {
         "nl": "Ongeldige kleur; gebruik w of b",
@@ -275,6 +319,82 @@ MESSAGES: dict[str, dict[str, str]] = {
     },
     "auto_enabled": {"nl": "Automodus aan", "en": "Auto mode on"},
     "auto_disabled": {"nl": "Automodus uit", "en": "Auto mode off"},
+    "pgn_mode_enabled": {
+        "nl": "PGN-databasemodus aan – robot zoekt eerst in historische partijen",
+        "en": "PGN database mode on – robot checks historical games first",
+    },
+    "pgn_mode_disabled": {
+        "nl": "PGN-databasemodus uit – robot zet altijd via Stockfish",
+        "en": "PGN database mode off – robot always moves via Stockfish",
+    },
+    "pgn_variations_enabled": {
+        "nl": "PGN-varianten aan – ook zijtakken worden meegenomen",
+        "en": "PGN variations on – side lines are included",
+    },
+    "pgn_variations_disabled": {
+        "nl": "PGN-varianten uit – alleen de hoofdlijn",
+        "en": "PGN variations off – main line only",
+    },
+    "database_move_found": {
+        "nl": "[Database] Gekozen {move} uit {file}: {options}",
+        "en": "[Database] Chose {move} from {file}: {options}",
+    },
+    "database_suggestions": {
+        "nl": "[Database] Suggesties voor jou uit {file}: {options}",
+        "en": "[Database] Suggestions for you from {file}: {options}",
+    },
+    "database_suggestions_none": {
+        "nl": "[Database] Geen historische zetten voor jouw beurt in deze stelling",
+        "en": "[Database] No historical moves for your turn in this position",
+    },
+    "database_search_mode_off": {
+        "nl": "Zet eerst PGN-databasemodus aan om te zoeken",
+        "en": "Enable PGN database mode first to search",
+    },
+    "database_search_no_position": {
+        "nl": "Geen bordstelling bekend – scan eerst het bord",
+        "en": "No board position known – scan the board first",
+    },
+    "database_miss_stockfish": {
+        "nl": "[Stockfish] Stelling niet gevonden in database. Stockfish denkt na...",
+        "en": "[Stockfish] Position not found in database. Stockfish is thinking...",
+    },
+    "database_pgn_missing": {
+        "nl": "Geen actieve PGN-database (of bestand ontbreekt). Stockfish wordt gebruikt.",
+        "en": "No active PGN database (or file missing). Using Stockfish.",
+    },
+    "database_selected": {
+        "nl": "Actieve PGN-database: {name}",
+        "en": "Active PGN database: {name}",
+    },
+    "database_uploaded": {
+        "nl": "PGN-database geüpload: {name}",
+        "en": "PGN database uploaded: {name}",
+    },
+    "database_deleted": {
+        "nl": "PGN-database verwijderd: {name}",
+        "en": "PGN database deleted: {name}",
+    },
+    "database_not_found": {
+        "nl": "PGN-database niet gevonden: {name}",
+        "en": "PGN database not found: {name}",
+    },
+    "database_name_invalid": {
+        "nl": "Ongeldige databasennaam (alleen .pgn, letters/cijfers/._- spatie)",
+        "en": "Invalid database name (only .pgn, letters/digits/._- space)",
+    },
+    "database_too_large": {
+        "nl": "PGN-database te groot (max {max} tekens)",
+        "en": "PGN database too large (max {max} characters)",
+    },
+    "database_upload_failed": {
+        "nl": "Uploaden PGN-database mislukt: {error}",
+        "en": "Uploading PGN database failed: {error}",
+    },
+    "database_delete_failed": {
+        "nl": "Verwijderen PGN-database mislukt: {error}",
+        "en": "Deleting PGN database failed: {error}",
+    },
     "unknown_type": {
         "nl": "Onbekend berichttype: {type}",
         "en": "Unknown message type: {type}",

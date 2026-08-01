@@ -131,7 +131,25 @@ class Engine:
     def available(self) -> bool:
         return self._sf is not None
 
+    def _quit_unlocked(self) -> None:
+        """Stop het huidige Stockfish-proces (aanroepen onder _lock)."""
+        sf = self._sf
+        self._sf = None
+        if sf is None:
+            return
+        try:
+            sf.send_quit_command()
+        except Exception as exc:
+            logger.debug("Stockfish quit: %s", exc)
+
+    def shutdown(self) -> None:
+        """Expliciet afsluiten (voorkomt __del__-ruis bij process-exit)."""
+        with self._lock:
+            self._quit_unlocked()
+
     def _start(self) -> None:
+        # Oude instantie eerst stoppen (o.a. na StockfishException-herstart).
+        self._quit_unlocked()
         if not self.path:
             self.error = (
                 "Stockfish-executable niet gevonden. Zet die in de projectmap "

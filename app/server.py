@@ -5,8 +5,10 @@ import asyncio
 import json
 import logging
 import re
+from contextlib import asynccontextmanager
 from pathlib import Path
 
+import chess
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response
@@ -15,7 +17,9 @@ from fastapi.staticfiles import StaticFiles
 from .ble_manager import BleManager
 from .engine import Engine
 from .game import GameState
+from .historical_moves import lijst_historische_zetten, zoek_historische_zet
 from .i18n import DEFAULT_LANGUAGE, tr
+from . import pgn_databases
 from . import pgn_store
 from .version import get_version
 
@@ -25,8 +29,27 @@ logger = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).parent / "static"
 PENDING_SCAN_TIMEOUT_S = 30.0
 MAX_PGN_CHARS = 200_000
+# Toegestane arm-commando's voor send_raw / testpaneel (prefix-match).
+_ALLOWED_ARM_PREFIXES = (
+    "move ",
+    "set ",
+    "get ",
+    "scan ",
+    "play ",
+    "display ",
+    "force ",
+    "new game",
+    "sync ",
+)
 
-app = FastAPI(title="CYNUS schaakarm interface")
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    yield
+    await state.shutdown()
+
+
+app = FastAPI(title="CYNUS schaakarm interface", lifespan=_lifespan)
 
 
 class AppState:
@@ -42,6 +65,10 @@ class AppState:
         )
         self.auto_mode = True
         self.language = DEFAULT_LANGUAGE
+        pgn_cfg = pgn_databases.load_config()
+        self.pgn_mode_enabled = bool(pgn_cfg.get("enabled", False))
+        self.active_pgn_database: str | None = pgn_cfg.get("active")
+        self.pgn_include_variations = bool(pgn_cfg.get("include_variations", False))
         self.last_fen: str | None = None
         self.robot_connected = False
         # human_color: kleur van de speler tegen de arm ("w" of "b")
@@ -61,6 +88,10 @@ class AppState:
         self.robot_move_busy = False
         # Na scan-mismatch: eerstvolgende get move van de arm negeren.
         self._suppress_next_get_move = False
+        # Gap-recovery: herscan-loop tot scan klopt of gebruiker stopt.
+        self.scan_recovery_active = False
+        self.scan_recovery_task: asyncio.Task | None = None
+        self._recovery_fen_future: asyncio.Future | None = None
         self.ponder_fen: str | None = None
         self.ponder_task: asyncio.Task | None = None
         self.ponder_result: dict | None = None
@@ -71,6 +102,35 @@ class AppState:
         self._display_clear_task: asyncio.Task | None = None
         self._display_retry_task: asyncio.Task | None = None
         self._last_displayed_turn: str | None = None
+        # Serialiseer UI-acties (meerdere tabs / snelle klikken).
+        self._state_lock = asyncio.Lock()
+
+    @staticmethod
+    def _placement(fen_or_placement: str) -> str:
+        return fen_or_placement.strip().split()[0]
+
+    def _set_last_fen(self, fen_or_placement: str | None) -> None:
+        if fen_or_placement is None:
+            self.last_fen = None
+            return
+        self.last_fen = self._placement(fen_or_placement)
+
+    async def shutdown(self) -> None:
+        """Cleanup bij process-exit: tasks, BLE, Stockfish."""
+        self.cancel_ponder()
+        await self.stop_scan_recovery(broadcast=False)
+        await self.stop_replay_auto(log_stop=False)
+        self.cancel_display_clear()
+        self.cancel_display_retry()
+        self.cancel_pending_timeout()
+        try:
+            await self.ble.shutdown()
+        except Exception as exc:
+            logger.debug("BLE shutdown: %s", exc)
+        try:
+            self.engine.shutdown()
+        except Exception as exc:
+            logger.debug("Engine shutdown: %s", exc)
 
     # -- broadcast ----------------------------------------------------------
 
@@ -146,6 +206,24 @@ class AppState:
             "flip": "off" if self.human_color == "w" else "on",
         }
 
+    def _pgn_config_snapshot(self) -> dict:
+        return {
+            "enabled": self.pgn_mode_enabled,
+            "active": self.active_pgn_database,
+            "include_variations": self.pgn_include_variations,
+        }
+
+    def pgn_databases_message(self) -> dict:
+        """Huidige PGN-databasestaat voor de UI; sync active als bestand weg is."""
+        payload = pgn_databases.state_payload(self._pgn_config_snapshot())
+        self._apply_pgn_config(payload)
+        return payload
+
+    def _apply_pgn_config(self, cfg: dict) -> None:
+        self.pgn_mode_enabled = bool(cfg.get("enabled", False))
+        self.active_pgn_database = cfg.get("active")
+        self.pgn_include_variations = bool(cfg.get("include_variations", False))
+
     async def require_robot_connection(self, action: str) -> bool:
         connected = self.robot_connected and self.ble.connected
         if connected:
@@ -219,6 +297,8 @@ class AppState:
             return
         if self.pending_scan_sync or self.pending_check or self.pending_verify_after_move:
             return
+        if self.scan_recovery_active:
+            return
         if self.game.replay_active or self.robot_move_busy:
             return
         fen = fen or self.analysis_fen()
@@ -262,6 +342,7 @@ class AppState:
         await self.archive_pgn_if_needed()
         self.cancel_ponder()
         await self.stop_replay_auto(log_stop=False)
+        await self.stop_scan_recovery(broadcast=True)
         self.clear_pending_scan()
         self.clear_pending_check()
         self.pending_verify_after_move = False
@@ -283,33 +364,230 @@ class AppState:
             "candidates": [],
             "full_fen": None,
         })
-        if notify_arm and self.robot_connected and self.ble.connected:
+        connected = self.robot_connected and self.ble.connected
+        if notify_arm and connected:
             await self.send_to_arm("new game")
         elif notify_arm:
             await self.log("info", self.msg("new_game_local_only"))
-        if self.robot_connected and self.ble.connected:
+        if connected:
+            # Zelfde als bij kleurwissel: app levert zetten (PGN/Stockfish), niet de arm-engine.
+            await self.send_to_arm("set internal engine off")
+            await self.log("info", self.msg("new_game_engine_off"))
+            self.pending_scan_sync = True
+            self.pending_scan_keep_history = False
+            self.pending_check = False
+            self.arm_pending_timeout("scan")
+            await self.send_to_arm("scan board")
+            await self.log("info", self.msg("scan_after_new_game"))
             await self.toon_aan_zet(for_turn="w")
 
+    def _expected_placement(self) -> str:
+        if self.game.has_position:
+            return self.game.board.board_fen()
+        return self.last_fen or "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR"
+
+    async def begin_scan_recovery(self, robot_fen: str, expected_fen: str) -> None:
+        """Start of vernieuw gap-recovery (modal + herscan-loop)."""
+        self._suppress_next_get_move = True
+        self.cancel_ponder()
+        already = self.scan_recovery_active
+        self.scan_recovery_active = True
+        await self.broadcast({
+            "type": "scan_recovery",
+            "active": True,
+            "robot_fen": robot_fen,
+            "expected_fen": expected_fen,
+        })
+        if already and self.scan_recovery_task and not self.scan_recovery_task.done():
+            return
+        await self.log("info", self.msg("scan_recovery_started"))
+        self.scan_recovery_task = asyncio.create_task(self.run_scan_recovery_loop())
+
+    async def stop_scan_recovery(self, *, broadcast: bool = True, log_stop: bool = False) -> None:
+        """Stop de herscan-loop; app-stelling blijft onaangeroerd."""
+        was_active = self.scan_recovery_active
+        self.scan_recovery_active = False
+        fut = self._recovery_fen_future
+        if fut is not None and not fut.done():
+            fut.cancel()
+        self._recovery_fen_future = None
+        task = self.scan_recovery_task
+        self.scan_recovery_task = None
+        if task and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        if broadcast and was_active:
+            await self.broadcast({
+                "type": "scan_recovery",
+                "active": False,
+                "robot_fen": "",
+                "expected_fen": self._expected_placement(),
+            })
+        if log_stop and was_active:
+            await self.log("info", self.msg("scan_recovery_stopped"))
+
+    async def request_recovery_scan(self, timeout_s: float = 30.0) -> str | None:
+        """scan board tijdens recovery; FEN komt via on_fen → future."""
+        if not (self.robot_connected and self.ble.connected):
+            return None
+        if not self.scan_recovery_active:
+            return None
+        loop = asyncio.get_running_loop()
+        self._recovery_fen_future = loop.create_future()
+        try:
+            await self.send_to_arm("scan board")
+            return await asyncio.wait_for(self._recovery_fen_future, timeout=timeout_s)
+        except (asyncio.TimeoutError, RuntimeError, asyncio.CancelledError):
+            return None
+        finally:
+            self._recovery_fen_future = None
+
+    async def _finish_scan_ok(self, fen: str, payload: dict) -> None:
+        """Afhandeling na geslaagde recovery-scan; bij robotbeurt volgt een zet."""
+        scanned = self._placement(fen)
+        self._set_last_fen(scanned)
+        self._suppress_next_get_move = False
+        expected_fen = (
+            self.game.board.board_fen() if self.game.has_position else fen
+        )
+        await self.broadcast({
+            "type": "check_result",
+            "ok": True,
+            "robot_fen": scanned,
+            "expected_fen": expected_fen,
+        })
+        await self.broadcast(payload)
+        if payload.get("last_move"):
+            await self.announce_check_state()
+            self.persist_pgn_current()
+        await self.toon_aan_zet()
+        if self._is_robot_turn():
+            if self.auto_mode:
+                await self.play_robot_move(reason="reason.scan_recovery")
+            else:
+                await self.start_ponder()
+        else:
+            await self.show_pgn_suggestions_for_player()
+            await self.start_ponder()
+
+    async def run_scan_recovery_loop(self) -> None:
+        """Herscan tot legale/exacte match of tot stop_scan_recovery."""
+        try:
+            while self.scan_recovery_active:
+                await self.wait_until_arm_idle(30.0)
+                if not self.scan_recovery_active:
+                    break
+                scanned = await self.request_recovery_scan()
+                if not self.scan_recovery_active:
+                    break
+                if scanned is None:
+                    await self.log("info", self.msg("scan_recovery_timeout"))
+                    await asyncio.sleep(1.0)
+                    continue
+
+                expected_before = self._expected_placement()
+                # Voorkom dat een foutieve start-scan de partij wist tijdens recovery.
+                if (
+                    scanned == "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR"
+                    and self.game.has_position
+                    and self.game.moves_san
+                    and self.game.board.board_fen() != scanned
+                ):
+                    await self.broadcast({
+                        "type": "scan_recovery",
+                        "active": True,
+                        "robot_fen": scanned,
+                        "expected_fen": expected_before,
+                    })
+                    await self.broadcast({
+                        "type": "check_result",
+                        "ok": False,
+                        "robot_fen": scanned,
+                        "expected_fen": expected_before,
+                    })
+                    await asyncio.sleep(1.0)
+                    continue
+
+                payload = self.orient_board_payload(
+                    self.game.update_from_placement(scanned, adopt_on_gap=False)
+                )
+                if payload.get("gap") or payload.get("error"):
+                    await self.broadcast({
+                        "type": "scan_recovery",
+                        "active": True,
+                        "robot_fen": scanned,
+                        "expected_fen": expected_before,
+                    })
+                    await self.broadcast({
+                        "type": "check_result",
+                        "ok": False,
+                        "robot_fen": scanned,
+                        "expected_fen": expected_before,
+                    })
+                    await asyncio.sleep(1.0)
+                    continue
+
+                # Succes: zet of exacte match.
+                if payload.get("last_move"):
+                    await self.log(
+                        "info",
+                        self.msg("move_detected", move=payload["last_move"]),
+                    )
+                else:
+                    await self.log("info", self.msg("scan_recovery_ok"))
+                self.scan_recovery_active = False
+                self.scan_recovery_task = None
+                await self.broadcast({
+                    "type": "scan_recovery",
+                    "active": False,
+                    "robot_fen": scanned,
+                    "expected_fen": (
+                        self.game.board.board_fen()
+                        if self.game.has_position
+                        else scanned
+                    ),
+                })
+                await self._finish_scan_ok(scanned, payload)
+                return
+        except asyncio.CancelledError:
+            raise
+        finally:
+            if self.scan_recovery_task is asyncio.current_task():
+                self.scan_recovery_task = None
+
     async def on_fen(self, fen: str) -> None:
+        scanned = self._placement(fen)
+
+        # Futures vóór recovery-guard: geen lock nodig, voorkomt deadlock.
+        fut_rec = self._recovery_fen_future
+        if fut_rec is not None and not fut_rec.done():
+            fut_rec.set_result(scanned)
+            return
+
         if self.pending_verify_after_move:
-            scanned = fen.strip().split()[0]
             fut = self._verify_fen_future
             if fut is not None and not fut.done():
                 fut.set_result(scanned)
             return
 
+        # Tussen recovery-scans: geen normale FEN-verwerking (voorkomt state-mutatie).
+        if self.scan_recovery_active:
+            await self.log("info", self.msg("fen_ignored_during_recovery"))
+            return
+
         if self.pending_check:
             self.clear_pending_check()
-            current = self.game.board.board_fen() if self.game.has_position else (
-                self.last_fen or "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR"
-            )
-            check_ok = fen.strip() == current.strip()
+            current = self._expected_placement()
+            check_ok = scanned == current
             if check_ok:
                 await self.log("info", self.msg("check_ok"))
-                await self.broadcast({"type": "check_result", "ok": True, "robot_fen": fen, "expected_fen": current})
+                await self.broadcast({"type": "check_result", "ok": True, "robot_fen": scanned, "expected_fen": current})
             else:
                 await self.log("info", self.msg("check_bad"))
-                await self.broadcast({"type": "check_result", "ok": False, "robot_fen": fen, "expected_fen": current})
+                await self.broadcast({"type": "check_result", "ok": False, "robot_fen": scanned, "expected_fen": current})
             await self.toon_aan_zet()
             if not check_ok:
                 self.cancel_display_retry()
@@ -319,9 +597,8 @@ class AppState:
         if self.game.replay_active:
             # Tijdens het naspelen is het app-bord leidend: de scan van de arm
             # mag de replaystelling nooit overschrijven.
-            self.last_fen = fen
+            self._set_last_fen(scanned)
             expected = self.game.board.board_fen()
-            scanned = fen.strip().split()[0]
             replay_ok = scanned == expected
             if replay_ok:
                 await self.broadcast({"type": "check_result", "ok": True, "robot_fen": scanned, "expected_fen": expected})
@@ -334,10 +611,38 @@ class AppState:
                 self._display_retry_task = asyncio.create_task(self._toon_aan_zet_later(3.0))
             return
 
-        expected_before = self.game.board.board_fen() if self.game.has_position else (
-            self.last_fen or "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR"
-        )
-        scanned = fen.strip().split()[0]
+        expected_before = self._expected_placement()
+        self.cancel_ponder()
+
+        if self.pending_scan_sync:
+            keep_history = self.pending_scan_keep_history
+            self.clear_pending_scan()
+            payload = self.orient_board_payload(
+                self.game.sync_from_scan(fen, keep_history=keep_history)
+            )
+            if keep_history and payload.get("gap"):
+                await self.log("info", self.msg("scan_keep_gap"))
+                await self.broadcast(payload)
+                await self.broadcast({
+                    "type": "check_result",
+                    "ok": False,
+                    "robot_fen": scanned,
+                    "expected_fen": expected_before,
+                })
+                await self.toon_aan_zet()
+                await self.begin_scan_recovery(scanned, expected_before)
+                return
+            self._set_last_fen(scanned)
+            if keep_history:
+                await self.log("info", self.msg("scan_keep_ok"))
+            else:
+                await self.log("info", self.msg("scan_synced"))
+            await self.broadcast(payload)
+            await self.toon_aan_zet()
+            await self.show_pgn_suggestions_for_player()
+            await self.start_ponder()
+            return
+
         # Beginstelling wist de historie in game.py – archiveer eerst.
         if (
             scanned == "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR"
@@ -346,26 +651,6 @@ class AppState:
             and self.game.board.board_fen() != scanned
         ):
             await self.archive_pgn_if_needed()
-
-        self.last_fen = fen
-        self.cancel_ponder()
-        if self.pending_scan_sync:
-            keep_history = self.pending_scan_keep_history
-            self.clear_pending_scan()
-            payload = self.orient_board_payload(
-                self.game.sync_from_scan(fen, keep_history=keep_history)
-            )
-            if keep_history:
-                if payload.get("gap"):
-                    await self.log("info", self.msg("scan_keep_gap"))
-                else:
-                    await self.log("info", self.msg("scan_keep_ok"))
-            else:
-                await self.log("info", self.msg("scan_synced"))
-            await self.broadcast(payload)
-            await self.toon_aan_zet()
-            await self.start_ponder()
-            return
 
         # App/Stockfish leidend: bij gap de robotstelling niet overnemen.
         payload = self.orient_board_payload(
@@ -387,7 +672,6 @@ class AppState:
             else (self.game.board.board_fen() if self.game.has_position else fen)
         )
         if had_error:
-            # Voorkom dat een meegeleverde get move Stockfish voor de speler laat zetten.
             self._suppress_next_get_move = True
             await self.broadcast({
                 "type": "check_result",
@@ -396,31 +680,38 @@ class AppState:
                 "expected_fen": expected_fen,
             })
             await self.log("info", self.msg("auto_check_bad"))
-        else:
-            self._suppress_next_get_move = False
-            await self.broadcast({
-                "type": "check_result",
-                "ok": True,
-                "robot_fen": scanned,
-                "expected_fen": expected_fen,
-            })
+            await self.broadcast(payload)
+            await self.toon_aan_zet()
+            self.cancel_display_retry()
+            self._display_retry_task = asyncio.create_task(self._toon_aan_zet_later(3.0))
+            if payload.get("gap"):
+                await self.begin_scan_recovery(scanned, expected_fen)
+            return
 
+        self._set_last_fen(scanned)
+        self._suppress_next_get_move = False
+        await self.broadcast({
+            "type": "check_result",
+            "ok": True,
+            "robot_fen": scanned,
+            "expected_fen": expected_fen,
+        })
         await self.broadcast(payload)
         if payload.get("last_move"):
             await self.announce_check_state()
             self.persist_pgn_current()
-        # Altijd tonen wie aan zet is – ook na error/gap (illegale zet / scanfout).
         await self.toon_aan_zet()
-        if had_error:
-            # Arm toont zelf vaak een error; zetbeurt kort daarna opnieuw.
-            self.cancel_display_retry()
-            self._display_retry_task = asyncio.create_task(self._toon_aan_zet_later(3.0))
+        if not self._is_robot_turn():
+            await self.show_pgn_suggestions_for_player()
         await self.start_ponder()
 
     async def on_get_move(self) -> None:
         await self.log("info", self.msg("get_move"))
         if not self.auto_mode:
             await self.log("info", self.msg("auto_mode_off_no_move"))
+            return
+        if self.scan_recovery_active:
+            await self.log("info", self.msg("get_move_during_recovery"))
             return
         if self._suppress_next_get_move:
             self._suppress_next_get_move = False
@@ -439,6 +730,90 @@ class AppState:
         robot = "b" if self.human_color == "w" else "w"
         turn = "w" if self.game.board.turn else "b"
         return turn == robot
+
+    def _format_db_candidates(
+        self,
+        bord: chess.Board,
+        entries: list[dict],
+    ) -> list[dict]:
+        """Zet historical_moves-kandidaten om naar UI-payload."""
+        candidates = []
+        for index, entry in enumerate(entries):
+            hist_move = entry["move"]
+            count = int(entry["count"])
+            uci = hist_move.uci()
+            try:
+                san = bord.san(hist_move)
+            except ValueError:
+                san = uci
+            candidates.append({
+                "move": uci,
+                "san": san,
+                "score": f"{count}x",
+                "pv": "",
+                "multipv": index + 1,
+            })
+        return candidates
+
+    async def show_pgn_suggestions_for_player(self, *, force: bool = False) -> None:
+        """Toon PGN-kandidaten voor de huidige stelling; kies/voer geen robotzet uit.
+
+        Standaard alleen bij speler-aan-zet. Met ``force=True`` (knop Zoek) ook
+        als de robot aan zet is.
+        """
+        if not force:
+            if not self.pgn_mode_enabled:
+                return
+            if not self.game.has_position or self._is_robot_turn():
+                return
+        else:
+            # Knop Zoek: ook zonder PGN-modus, op basis van actieve database.
+            self._ensure_game_position()
+            if not self.game.has_position:
+                await self.log("info", self.msg("database_search_no_position"))
+                return
+        db_path = pgn_databases.get_active_path({
+            "enabled": self.pgn_mode_enabled,
+            "active": self.active_pgn_database,
+        })
+        if db_path is None:
+            if force:
+                await self.log("info", self.msg("database_pgn_missing"))
+            return
+
+        bord = self.game.board.copy()
+        fen = bord.fen()
+        entries = await asyncio.to_thread(
+            lijst_historische_zetten,
+            bord,
+            db_path,
+            include_variations=self.pgn_include_variations,
+        )
+        if entries is None:
+            if force:
+                await self.log("info", self.msg("database_pgn_missing"))
+            return
+
+        candidates = self._format_db_candidates(bord, entries)
+        await self.broadcast({
+            "type": "engine_move",
+            "move": "",
+            "fen": fen,
+            "candidates": candidates,
+            "full_fen": fen,
+            "source": "database",
+            "suggestion": True,
+        })
+        if candidates:
+            options = ", ".join(
+                f"{c['san']} ({c['score']})" for c in candidates
+            )
+            await self.log(
+                "info",
+                self.msg("database_suggestions", options=options, file=db_path.name),
+            )
+        else:
+            await self.log("info", self.msg("database_suggestions_none"))
 
     def _ensure_game_position(self) -> None:
         """Zorg dat game.has_position gezet is (nodig om robotzetten lokaal te pushen)."""
@@ -518,7 +893,7 @@ class AppState:
                 "robot_fen": scanned,
                 "expected_fen": expected,
             })
-            self.last_fen = scanned
+            self._set_last_fen(scanned)
             return
 
         # Rokade: normale move opnieuw (force verplaatst alleen de koning).
@@ -558,7 +933,7 @@ class AppState:
                 "robot_fen": scanned2,
                 "expected_fen": expected,
             })
-            self.last_fen = scanned2
+            self._set_last_fen(scanned2)
             return
 
         await self.log(
@@ -578,6 +953,7 @@ class AppState:
         """Pas robotzet lokaal toe, stuur naar arm, verifieer. True als verstuurd.
 
         Alleen toegestaan als de robotkleur aan zet is (nooit voor de speler).
+        Lokale staat wordt teruggedraaid als de arm-send mislukt.
         """
         self._ensure_game_position()
         if not self._is_robot_turn():
@@ -592,18 +968,23 @@ class AppState:
             )
             return False
 
-        await self.send_to_arm(f"move {uci}")
+        if not await self.send_to_arm(f"move {uci}"):
+            self.game.undo_last_move()
+            await self.broadcast(self.board_message())
+            return False
+
         await self.broadcast(self.board_message())
         await self.announce_check_state()
         self.persist_pgn_current()
-        self.last_fen = self.game.board.board_fen()
+        self._set_last_fen(self.game.board.board_fen())
         await self.toon_aan_zet()
         await self.verify_and_correct_robot_move(uci, piece_s, piece_t)
         await self.toon_aan_zet()
+        await self.show_pgn_suggestions_for_player()
         return True
 
     async def play_robot_move(self, *, reason: str = "reason.manual") -> None:
-        """Laat Stockfish een zet berekenen en stuur die naar de arm."""
+        """Kies een robotzet (PGN-database of Stockfish) en stuur die naar de arm."""
         reason_text = self.msg(reason)
         if self.robot_move_busy:
             await self.log("info", self.msg("robot_move_busy"))
@@ -611,7 +992,7 @@ class AppState:
         if self.game.replay_active:
             await self.log("info", self.msg("replay_active_block"))
             return
-        if self.pending_scan_sync or self.pending_verify_after_move:
+        if self.pending_scan_sync or self.pending_verify_after_move or self.scan_recovery_active:
             await self.log("info", self.msg("wait_scan"))
             return
         self._ensure_game_position()
@@ -622,18 +1003,69 @@ class AppState:
         if self.last_fen is None:
             # Geen FEN van de arm: gebruik startpositie of huidige game-stelling.
             if self.game.has_position:
-                self.last_fen = self.game.board.board_fen()
+                self._set_last_fen(self.game.board.board_fen())
             else:
-                self.last_fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR"
+                self._set_last_fen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR")
             await self.log("info", self.msg("no_fen_fallback"))
-        if not self.engine.available:
-            await self.log("info", self.msg("engine_unavailable", error=self.engine.error))
-            return
 
         self.robot_move_busy = True
         try:
             self._ensure_game_position()
             fen = self.analysis_fen()
+
+            if self.pgn_mode_enabled:
+                db_path = pgn_databases.get_active_path({
+                    "enabled": self.pgn_mode_enabled,
+                    "active": self.active_pgn_database,
+                })
+                if db_path is None:
+                    await self.log("info", self.msg("database_pgn_missing"))
+                else:
+                    if self.game.has_position:
+                        bord = self.game.board.copy()
+                    else:
+                        bord = chess.Board(fen)
+                    db_result = await asyncio.to_thread(
+                        zoek_historische_zet,
+                        bord,
+                        db_path,
+                        include_variations=self.pgn_include_variations,
+                    )
+                    if db_result is not None:
+                        gekozen = db_result["move"]
+                        move = gekozen.uci()
+                        candidates = self._format_db_candidates(
+                            bord, db_result["candidates"]
+                        )
+                        options = ", ".join(
+                            f"{c['san']} ({c['score']})" for c in candidates
+                        )
+                        await self.broadcast({
+                            "type": "engine_move",
+                            "move": move,
+                            "fen": fen,
+                            "candidates": candidates,
+                            "full_fen": fen,
+                            "source": "database",
+                        })
+                        await self.log(
+                            "info",
+                            self.msg(
+                                "database_move_found",
+                                move=move,
+                                file=db_path.name,
+                                options=options,
+                            ),
+                        )
+                        self.cancel_ponder()
+                        await self.execute_robot_uci(move)
+                        return
+                    await self.log("info", self.msg("database_miss_stockfish"))
+
+            if not self.engine.available:
+                await self.log("info", self.msg("engine_unavailable", error=self.engine.error))
+                return
+
             result = None
             if self.ponder_fen == fen:
                 if self.ponder_result is not None:
@@ -673,6 +1105,7 @@ class AppState:
                 "fen": fen,
                 "candidates": candidates,
                 "full_fen": result.get("fen"),
+                "source": "stockfish",
             })
             await self.log("info", self.msg("engine_chooses", move=move, score=score))
             await self.execute_robot_uci(move)
@@ -719,6 +1152,7 @@ class AppState:
                 "fen": fen,
                 "candidates": candidates,
                 "full_fen": result.get("fen"),
+                "source": "stockfish",
             })
             await self.log("info", self.msg("engine_chooses", move=move, score=score))
             if self.robot_connected and self.ble.connected:
@@ -733,6 +1167,7 @@ class AppState:
 
     async def on_ble_disconnect(self) -> None:
         self.cancel_ponder()
+        await self.stop_scan_recovery(broadcast=True)
         self.clear_pending_scan()
         self.clear_pending_check()
         self.pending_verify_after_move = False
@@ -752,12 +1187,15 @@ class AppState:
 
     # -- acties vanuit de UI --------------------------------------------------
 
-    async def send_to_arm(self, command: str) -> None:
+    async def send_to_arm(self, command: str) -> bool:
+        """Stuur commando naar de arm. True bij succes."""
         try:
             await self.ble.send(command)
             await self.log("tx", command)
+            return True
         except Exception as exc:
             await self.log("info", self.msg("send_failed", error=exc))
+            return False
 
     def cancel_display_clear(self) -> None:
         if self._display_clear_task and not self._display_clear_task.done():
@@ -787,7 +1225,10 @@ class AppState:
             raise
 
     async def toon_text(self, text: str, duration_s: float = 10.0) -> bool:
-        """Toon tekst op het armscherm (max 10 tekens); wis na duration_s seconden."""
+        """Toon tekst op het armscherm (max 10 tekens).
+
+        Wis na duration_s seconden. duration_s == 0: tekst blijft staan (geen auto-clear).
+        """
         cleaned = (text or "").strip()
         if not cleaned:
             return False
@@ -796,12 +1237,16 @@ class AppState:
             return False
         if not (self.robot_connected and self.ble.connected):
             return False
-        await self.send_to_arm(f"display txt {cleaned}")
+        if not await self.send_to_arm(f"display txt {cleaned}"):
+            return False
         self.cancel_display_clear()
         try:
             duration = float(duration_s)
         except (TypeError, ValueError):
             duration = 10.0
+        if duration <= 0:
+            # 0 (of negatief): blijvend tonen, niet wissen.
+            return True
         duration = max(0.5, min(300.0, duration))
         self._display_clear_task = asyncio.create_task(self._clear_display_after(duration))
         return True
@@ -827,7 +1272,7 @@ class AppState:
         if not force and for_turn == self._last_displayed_turn:
             return
         label = self.msg("display.turn_white" if for_turn == "w" else "display.turn_black")
-        if await self.toon_text(label):
+        if await self.toon_text(label, duration_s=0):
             self._last_displayed_turn = for_turn
 
     async def announce_check_state(self) -> None:
@@ -853,7 +1298,14 @@ class AppState:
             await self.log("info", self.msg("replay_info", reason=result.get("reason")))
             await self.broadcast(self.game.replay_state())
             return result
-        await self.send_to_arm(f"move {result['uci']}")
+        if not await self.send_to_arm(f"move {result['uci']}"):
+            self.game.undo_last_move()
+            if self.game.replay_index > 0:
+                self.game.replay_index -= 1
+            self.game.replay_active = True
+            await self.broadcast(self.board_message())
+            await self.broadcast(self.game.replay_state())
+            return {"ok": False, "reason": self.msg("send_failed", error="arm")}
         await self.log(
             "info",
             self.msg(
@@ -887,6 +1339,9 @@ class AppState:
         async def run() -> None:
             try:
                 while self.game.replay_active and self.replay_auto_running:
+                    await self.wait_until_arm_idle(30.0)
+                    if not (self.game.replay_active and self.replay_auto_running):
+                        break
                     result = await self.execute_replay_move()
                     if not result.get("ok") or result.get("done"):
                         break
@@ -918,7 +1373,17 @@ class AppState:
         if running and log_stop:
             await self.log("info", self.msg("replay_auto_stopped"))
 
+    def _arm_command_allowed(self, command: str) -> bool:
+        lower = command.strip().lower()
+        if not lower:
+            return False
+        return any(lower == p.strip() or lower.startswith(p) for p in _ALLOWED_ARM_PREFIXES)
+
     async def handle_message(self, msg: dict) -> None:
+        async with self._state_lock:
+            await self._handle_message_locked(msg)
+
+    async def _handle_message_locked(self, msg: dict) -> None:
         msg_type = msg.get("type")
 
         if msg_type == "scan":
@@ -941,6 +1406,9 @@ class AppState:
                 await self.ble.connect(address)
                 self.robot_connected = True
                 await self.log("info", self.msg("connected", name=self.ble.device_name, address=address))
+                # App levert zetten (PGN/Stockfish); interne arm-engine meteen uit.
+                await self.send_to_arm("set internal engine off")
+                await self.log("info", self.msg("connect_engine_off"))
             except Exception as exc:
                 self.robot_connected = False
                 await self.log("info", self.msg("connect_failed", error=exc))
@@ -953,11 +1421,15 @@ class AppState:
                 await self.log("info", self.msg("disconnect_failed", error=exc))
             finally:
                 self.robot_connected = False
+                await self.stop_scan_recovery(broadcast=True)
                 self.clear_pending_scan()
                 self.clear_pending_check()
                 self.cancel_ponder()
             await self.log("info", self.msg("disconnected"))
             await self.broadcast(self.status_message())
+
+        elif msg_type == "cancel_scan_recovery":
+            await self.stop_scan_recovery(broadcast=True, log_stop=True)
 
         elif msg_type == "robot_move":
             if not await self.require_robot_connection("action.robot_move"):
@@ -973,6 +1445,9 @@ class AppState:
         elif msg_type == "scan_board":
             if not await self.require_robot_connection("action.scan_board"):
                 return
+            if self.scan_recovery_active:
+                await self.log("info", self.msg("fen_ignored_during_recovery"))
+                return
             self.pending_scan_sync = True
             self.pending_scan_keep_history = True
             self.pending_check = False
@@ -983,6 +1458,9 @@ class AppState:
 
         elif msg_type == "check_position":
             if not await self.require_robot_connection("action.check"):
+                return
+            if self.scan_recovery_active:
+                await self.log("info", self.msg("fen_ignored_during_recovery"))
                 return
             if self.pending_scan_sync:
                 await self.log("info", self.msg("wait_current_scan"))
@@ -1062,9 +1540,31 @@ class AppState:
             if uci:
                 validation = self.game.validate_uci_move(uci)
                 if validation["ok"]:
+                    applied = self.game.apply_uci_move(uci)
+                    if not applied.get("ok"):
+                        await self.broadcast({
+                            "type": "move_validation",
+                            "ok": False,
+                            "move": uci,
+                            "reason": applied.get("reason", validation["reason"]),
+                        })
+                        return
+                    if not await self.send_to_arm(f"move {uci}"):
+                        self.game.undo_last_move()
+                        await self.broadcast(self.board_message())
+                        await self.broadcast({
+                            "type": "move_validation",
+                            "ok": False,
+                            "move": uci,
+                            "reason": self.msg("send_failed", error="arm"),
+                        })
+                        return
                     await self.log("info", self.msg("move_legal", san=validation["san"], uci=uci))
-                    await self.send_to_arm(f"move {uci}")
+                    self._set_last_fen(self.game.board.board_fen())
+                    self.persist_pgn_current()
+                    await self.broadcast(self.board_message())
                     await self.broadcast({"type": "move_validation", "ok": True, "move": uci, "san": validation["san"]})
+                    await self.toon_aan_zet()
                 else:
                     await self.log("info", self.msg("move_rejected", uci=uci, reason=validation["reason"]))
                     await self.broadcast({
@@ -1077,18 +1577,26 @@ class AppState:
         elif msg_type == "force_send_move":
             if not await self.require_robot_connection("action.force_move"):
                 return
-            uci = str(msg.get("move", "")).strip()
+            uci = str(msg.get("move", "")).strip().lower()
+            if not re.fullmatch(r"[a-h][1-8][a-h][1-8][qrbn]?", uci):
+                await self.log("info", self.msg("move_rejected", uci=uci, reason=self.msg("reason.bad_uci")))
+                return
             if uci:
                 await self.log("info", self.msg("move_override", uci=uci))
-                await self.send_to_arm(f"move {uci}")
-                await self.broadcast({"type": "move_forced", "move": uci})
+                if await self.send_to_arm(f"move {uci}"):
+                    # Force: arm-only; markeer desync-risico via check_result later.
+                    await self.broadcast({"type": "move_forced", "move": uci})
 
         elif msg_type == "send_raw":
             if not await self.require_robot_connection("action.send_command"):
                 return
             command = str(msg.get("command", "")).strip()
-            if command:
-                await self.send_to_arm(command)
+            if not command:
+                return
+            if not self._arm_command_allowed(command):
+                await self.log("info", self.msg("raw_command_rejected", command=command))
+                return
+            await self.send_to_arm(command)
 
         elif msg_type == "toon_text":
             if not await self.require_robot_connection("action.toon_text"):
@@ -1156,6 +1664,117 @@ class AppState:
             await self.log("info", self.msg("auto_enabled" if self.auto_mode else "auto_disabled"))
             await self.broadcast({"type": "auto", "enabled": self.auto_mode})
 
+        elif msg_type == "toggle_pgn_mode":
+            cfg = pgn_databases.set_enabled(
+                bool(msg.get("enabled", False)),
+                self._pgn_config_snapshot(),
+            )
+            self._apply_pgn_config(cfg)
+            await self.log(
+                "info",
+                self.msg("pgn_mode_enabled" if self.pgn_mode_enabled else "pgn_mode_disabled"),
+            )
+            await self.broadcast(self.pgn_databases_message())
+            if self.pgn_mode_enabled:
+                await self.show_pgn_suggestions_for_player()
+
+        elif msg_type == "toggle_pgn_variations":
+            cfg = pgn_databases.set_include_variations(
+                bool(msg.get("enabled", False)),
+                self._pgn_config_snapshot(),
+            )
+            self._apply_pgn_config(cfg)
+            await self.log(
+                "info",
+                self.msg(
+                    "pgn_variations_enabled"
+                    if self.pgn_include_variations
+                    else "pgn_variations_disabled"
+                ),
+            )
+            await self.broadcast(self.pgn_databases_message())
+            if self.pgn_mode_enabled:
+                await self.show_pgn_suggestions_for_player()
+
+        elif msg_type == "set_pgn_database":
+            name = msg.get("name")
+            try:
+                cfg = pgn_databases.set_active(
+                    None if name in (None, "") else str(name),
+                    self._pgn_config_snapshot(),
+                )
+            except ValueError:
+                await self.log("info", self.msg("database_name_invalid"))
+                await self.broadcast(self.pgn_databases_message())
+                return
+            except FileNotFoundError:
+                await self.log("info", self.msg("database_not_found", name=name))
+                await self.broadcast(self.pgn_databases_message())
+                return
+            self._apply_pgn_config(cfg)
+            await self.log(
+                "info",
+                self.msg(
+                    "database_selected",
+                    name=self.active_pgn_database or "–",
+                ),
+            )
+            await self.broadcast(self.pgn_databases_message())
+            if self.pgn_mode_enabled:
+                await self.show_pgn_suggestions_for_player()
+
+        elif msg_type == "search_pgn_database":
+            await self.show_pgn_suggestions_for_player(force=True)
+
+        elif msg_type == "upload_pgn_database":
+            name = str(msg.get("name", "")).strip()
+            pgn_text = str(msg.get("pgn", ""))
+            if len(pgn_text) > pgn_databases.MAX_DATABASE_CHARS:
+                await self.log(
+                    "info",
+                    self.msg("database_too_large", max=pgn_databases.MAX_DATABASE_CHARS),
+                )
+                return
+            try:
+                path = pgn_databases.save_database(name, pgn_text)
+                snap = self._pgn_config_snapshot()
+                snap["active"] = path.name
+                cfg = pgn_databases.set_active(path.name, snap)
+            except ValueError as exc:
+                await self.log("info", self.msg("database_upload_failed", error=exc))
+                await self.broadcast(self.pgn_databases_message())
+                return
+            except OSError as exc:
+                await self.log("info", self.msg("database_upload_failed", error=exc))
+                await self.broadcast(self.pgn_databases_message())
+                return
+            self._apply_pgn_config(cfg)
+            await self.log("info", self.msg("database_uploaded", name=path.name))
+            await self.broadcast(self.pgn_databases_message())
+
+        elif msg_type == "delete_pgn_database":
+            name = str(msg.get("name", "")).strip()
+            try:
+                cfg = pgn_databases.delete_database(
+                    name,
+                    self._pgn_config_snapshot(),
+                )
+            except ValueError:
+                await self.log("info", self.msg("database_name_invalid"))
+                await self.broadcast(self.pgn_databases_message())
+                return
+            except FileNotFoundError:
+                await self.log("info", self.msg("database_not_found", name=name))
+                await self.broadcast(self.pgn_databases_message())
+                return
+            except OSError as exc:
+                await self.log("info", self.msg("database_delete_failed", error=exc))
+                await self.broadcast(self.pgn_databases_message())
+                return
+            self._apply_pgn_config(cfg)
+            await self.log("info", self.msg("database_deleted", name=name))
+            await self.broadcast(self.pgn_databases_message())
+
         elif msg_type == "set_language":
             lang = str(msg.get("language", DEFAULT_LANGUAGE)).lower()
             if lang not in ("nl", "en"):
@@ -1178,6 +1797,7 @@ async def websocket_endpoint(ws: WebSocket):
     await ws.send_text(json.dumps(state.status_message()))
     await ws.send_text(json.dumps(state.engine_message()))
     await ws.send_text(json.dumps({"type": "auto", "enabled": state.auto_mode}))
+    await ws.send_text(json.dumps(state.pgn_databases_message()))
     await ws.send_text(json.dumps(state.side_message()))
     await ws.send_text(json.dumps(state.board_message()))
     await ws.send_text(json.dumps(state.game.replay_state()))

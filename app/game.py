@@ -49,6 +49,7 @@ class GameState:
         return self._has_position
 
     def set_turn(self, turn: str) -> None:
+        """Standaard-zetkleur voor FEN-sync (engine/robot), niet het live zetrecht."""
         if turn in ("w", "b"):
             self._turn = turn
 
@@ -93,16 +94,14 @@ class GameState:
             self._set_from_placement(placement, clear_history=True)
             return self.render(reset=True)
 
-        if self._has_position and self.board.board_fen() == placement:
+        if not self._has_position:
+            self._set_from_placement(placement, clear_history=False)
+            return self.render(reset=True)
+
+        if self.board.board_fen() == placement:
             return self.render()
 
-        # Scan wijkt af van de verwachte stelling: stukken bijwerken,
-        # historie en kleur-aan-zet behouden.
-        self.board.set_board_fen(placement)
-        self.board.castling_rights &= self._infer_castling_rights(self.board)
-        self.board.ep_square = None
-        self.last_move = None
-        self._has_position = True
+        # Scan wijkt af: app blijft leidend (geen stukken/zetten/zetrecht wijzigen).
         return self.render(gap=True)
 
     def update_from_placement(
@@ -204,6 +203,20 @@ class GameState:
             "san": validation["san"],
             "uci": uci.strip(),
         }
+
+    def undo_last_move(self) -> bool:
+        """Maak de laatste doorgeduwde zet ongedaan (bij mislukte arm-send)."""
+        if not self.moves:
+            return False
+        self.board.pop()
+        self.moves.pop()
+        if self.moves_san:
+            self.moves_san.pop()
+        self.last_move = self.moves[-1] if self.moves else None
+        self._turn = "w" if self.board.turn == chess.WHITE else "b"
+        if not self.moves:
+            self._black_started = False
+        return True
 
     def force_move_pieces(self, uci: str) -> tuple[str, str | None]:
         """Stukletters (s, t) voor force-move vóór het pushen van de zet."""
