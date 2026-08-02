@@ -497,6 +497,52 @@ function onScanRecovery(msg) {
   }
 }
 
+// -- Contact (Formspree @formspree/ajax) ------------------------------------
+
+function openContactModal() {
+  const modal = $("contact-modal");
+  if (!modal) return;
+  modal.classList.remove("hidden");
+  const name = $("contact-name");
+  if (name) name.focus();
+}
+
+function closeContactModal() {
+  const modal = $("contact-modal");
+  if (!modal) return;
+  modal.classList.add("hidden");
+}
+
+function initContactForm() {
+  const openBtn = $("btn-contact");
+  const cancelBtn = $("btn-contact-cancel");
+  const form = $("contact-form");
+  const modal = $("contact-modal");
+  if (!openBtn || !form || !modal) return;
+  openBtn.addEventListener("click", openContactModal);
+  if (cancelBtn) cancelBtn.addEventListener("click", closeContactModal);
+  // Submit wordt afgehandeld door @formspree/ajax (geen preventDefault hier).
+  form.addEventListener(
+    "submit",
+    (event) => {
+      const gotcha = form.querySelector('input[name="_gotcha"]');
+      if (gotcha && gotcha.value.trim()) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      }
+    },
+    true
+  );
+  modal.addEventListener("click", (e) => {
+    if (e.target === modal) closeContactModal();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !modal.classList.contains("hidden")) {
+      closeContactModal();
+    }
+  });
+}
+
 function onMoveValidation(msg) {
   const el = $("move-validation");
   const forceBtn = $("btn-force-move");
@@ -911,6 +957,7 @@ function init() {
   $("btn-scan-recovery-stop").addEventListener("click", () => {
     send({ type: "cancel_scan_recovery" });
   });
+  initContactForm();
   $("btn-new-game").addEventListener("click", () => {
     if (!window.confirm(t("new_game.confirm"))) return;
     const check = $("check-status");

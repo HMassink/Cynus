@@ -128,6 +128,10 @@ the test panel are added to the `COMMANDS` array at the top of
 - `app/static/` – web interface (HTML/CSS/JS, no build step; `i18n.js` for UI strings)
 - `documentation/` – protocol and examples
 
+## Contact form
+
+The footer **Contact** link opens a modal wired with Formspree’s official [`@formspree/ajax`](https://help.formspree.io/hc/en-us/articles/360013470814-Submit-forms-with-JavaScript-AJAX) SDK (CDN) to form id `xpqvgnkq`. Your inbox address is configured only in the Formspree dashboard (not in this repo). Under the form’s Spam protection settings, enable reCAPTCHA and leave the custom reCAPTCHA key empty so Formspree’s built-in captcha is used.
+
 ## Disclaimer
 
 This software is provided as is, without warranty. Made with [Cursor](https://cursor.com).

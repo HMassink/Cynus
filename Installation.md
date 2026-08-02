@@ -114,6 +114,10 @@ Use **NL** / **EN** in the header to switch language.
 2. Turn on the chess arm.
 3. In the UI, click **Scan**, then **Connect** (devices whose name starts with `CYNUS-` or `CMR`).
 
+## Contact form (Formspree)
+
+The UI footer Contact form uses the Formspree Vanilla JS SDK (`@formspree/ajax` from CDN) with form id `xpqvgnkq`. In the Formspree dashboard for that form: set your notification email, turn **Spam protection → reCAPTCHA** on, and leave **Custom reCAPTCHA Key** empty so Formspree’s built-in captcha is used. No email address or secrets belong in the project files. Internet access is required for the CDN script and form submit.
+
 ## Checklist
 
 1. Install uv  
@@ -124,6 +128,7 @@ Use **NL** / **EN** in the header to switch language.
 6. Tune `engine_defaults.json` for your PC  
 7. Start with `uv run … python main.py`  
 8. Open the browser and connect the arm  
+9. (Optional) Configure Formspree captcha for the Contact form (see above)  
 
 ## Alternative: classic venv + pip
 

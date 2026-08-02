@@ -227,11 +227,46 @@
   </main>
 
   <footer class="site-footer">
-    <div>© 2026 Henk Massink</div>
+    <div class="site-footer-row">
+      <span>© 2026 Henk Massink</span>
+      <button type="button" id="btn-contact" class="footer-link" data-i18n="footer.contact">Contact</button>
+    </div>
     <p class="site-footer-disclaimer" data-i18n="footer.disclaimer">
       Deze software wordt geleverd zoals ze is, zonder garantie. Gemaakt met Cursor.
     </p>
   </footer>
+
+  <div id="contact-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="contact-title">
+    <div class="modal-dialog modal-dialog-contact">
+      <h2 id="contact-title" data-i18n="contact.title">Contact</h2>
+      <p class="modal-body" data-i18n="contact.intro">Stuur een bericht. Je e-mailadres wordt alleen gebruikt om te antwoorden.</p>
+      <div data-fs-success data-i18n="contact.success">Bericht verstuurd. Bedankt!</div>
+      <div data-fs-error></div>
+      <form id="contact-form" class="contact-form">
+        <label class="contact-field" for="contact-name">
+          <span data-i18n="contact.name">Naam</span>
+          <input type="text" id="contact-name" name="name" required autocomplete="name" maxlength="120" data-fs-field>
+          <span data-fs-error="name" class="contact-field-error"></span>
+        </label>
+        <label class="contact-field" for="contact-email">
+          <span data-i18n="contact.email">E-mail</span>
+          <input type="email" id="contact-email" name="email" required autocomplete="email" maxlength="200" data-fs-field>
+          <span data-fs-error="email" class="contact-field-error"></span>
+        </label>
+        <label class="contact-field" for="contact-message">
+          <span data-i18n="contact.message">Bericht</span>
+          <textarea id="contact-message" name="message" required rows="5" maxlength="4000" data-fs-field></textarea>
+          <span data-fs-error="message" class="contact-field-error"></span>
+        </label>
+        <!-- Honeypot: leave empty (Formspree _gotcha) -->
+        <input type="text" name="_gotcha" class="contact-honeypot" tabindex="-1" autocomplete="off" aria-hidden="true">
+        <div class="modal-actions">
+          <button type="button" id="btn-contact-cancel" data-i18n="contact.cancel">Annuleren</button>
+          <button type="submit" id="btn-contact-send" data-fs-submit-btn data-i18n="contact.send">Versturen</button>
+        </div>
+      </form>
+    </div>
+  </div>
 
   <div id="scan-recovery-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="scan-recovery-title">
     <div class="modal-dialog">
@@ -251,5 +286,10 @@
 
   <script src="/static/i18n.js?v=__APP_VERSION__"></script>
   <script src="/static/app.js?v=__APP_VERSION__"></script>
+  <script>
+    window.formspree = window.formspree || function () { (formspree.q = formspree.q || []).push(arguments); };
+    formspree("initForm", { formElement: "#contact-form", formId: "xpqvgnkq" });
+  </script>
+  <script src="https://unpkg.com/@formspree/ajax@1" defer></script>
 </body>
 </html>

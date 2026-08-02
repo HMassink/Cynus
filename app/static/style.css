@@ -78,6 +78,29 @@ main {
   color: var(--muted);
 }
 
+.site-footer-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.footer-link {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.footer-link:hover {
+  color: var(--accent-hover);
+}
+
 .site-footer-disclaimer {
   margin: 6px auto 0;
   max-width: 36rem;
@@ -688,6 +711,88 @@ input[type="text"] { flex: 1; min-width: 100px; }
   margin: 0 0 10px;
   font-size: 1.15rem;
   color: var(--bad);
+}
+
+.modal-dialog-contact h2 {
+  color: var(--text);
+}
+
+.contact-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.contact-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.85rem;
+  color: var(--muted);
+  text-align: left;
+}
+
+.contact-field input,
+.contact-field textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  resize: vertical;
+}
+
+.contact-field input:focus,
+.contact-field textarea:focus {
+  outline: 1px solid var(--accent);
+  border-color: var(--accent);
+}
+
+.contact-honeypot {
+  position: absolute;
+  left: -9999px;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.contact-field-error,
+[data-fs-error] {
+  font-size: 0.8rem;
+  color: var(--bad);
+  min-height: 0;
+}
+
+[data-fs-error]:empty {
+  display: none;
+}
+
+[data-fs-success] {
+  display: none;
+  margin: 0 0 12px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: rgba(62, 207, 122, 0.12);
+  color: var(--ok);
+  font-size: 0.9rem;
+}
+
+[data-fs-success][data-fs-active] {
+  display: block;
+}
+
+[data-fs-error=""][data-fs-active],
+[data-fs-error]:not([data-fs-error=""]):not(:empty) {
+  display: block;
+  margin: 0 0 10px;
+}
+
+[data-fs-field][aria-invalid="true"] {
+  border-color: var(--bad);
 }
 
 .modal-body {
